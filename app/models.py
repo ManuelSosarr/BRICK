@@ -70,6 +70,9 @@ class CallRecord(Base):
     exclude_keep = Column(String)
     source = Column(String, default="")
     
+    # Tenant
+    tenant_id = Column(String, index=True)
+
     # Tracking
     week_loaded = Column(String, index=True)
     created_at = Column(DateTime, server_default=func.now())
@@ -79,6 +82,7 @@ class ManualExclusion(Base):
     __tablename__ = "manual_exclusions"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, index=True)
     address = Column(String, index=True)
     phone = Column(String)
     reason = Column(String)
@@ -97,6 +101,7 @@ class SkipTraceRecord(Base):
     __tablename__ = "skiptrace_records"
 
     id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, index=True)
     phone = Column(String, index=True)
     first_name = Column(String)
     last_name = Column(String)
@@ -105,4 +110,12 @@ class SkipTraceRecord(Base):
     campaign_id = Column(String, index=True)
     list_id = Column(String, index=True)
     date_added = Column(String)
+    created_at = Column(DateTime, server_default=func.now())
+
+class TenantCampaign(Base):
+    __tablename__ = "tenant_campaigns"
+
+    id = Column(Integer, primary_key=True, index=True)
+    tenant_id = Column(String, index=True)
+    campaign_id = Column(String, index=True)
     created_at = Column(DateTime, server_default=func.now())

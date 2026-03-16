@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from app.auth import get_current_tenant
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import CallRecord, ManualExclusion, SkipTraceRecord
@@ -24,13 +25,13 @@ def clean(value):
 def is_empty_address(address):
     return address in EMPTY_ADDRESS_VALUES or (address and address.strip().upper() == "NONE")
 
-def get_updated_data_records(db, date_from=None, date_to=None, campaign_id=None, list_id=None):
-    manual_exclusions = db.query(ManualExclusion).all()
+def get_updated_data_records(db, date_from=None, date_to=None, campaign_id=None, list_id=None, tenant_id=None):
+    manual_exclusions = db.query(ManualExclusion).filter(ManualExclusion.tenant_id == tenant_id).all() if tenant_id else db.query(ManualExclusion).all()
     excluded_addresses = {normalize_address(e.address) for e in manual_exclusions if e.address}
 
-    set_ni_records = db.query(CallRecord).filter(
-        CallRecord.status.in_(PROPERTY_EXCLUDE_STATUSES)
-    ).all()
+    q = db.query(CallRecord).filter(CallRecord.status.in_(PROPERTY_EXCLUDE_STATUSES))
+    if tenant_id: q = q.filter(CallRecord.tenant_id == tenant_id)
+    set_ni_records = q.all()
     set_ni_addresses = {normalize_address(r.address) for r in set_ni_records if not is_empty_address(r.address)}
     excluded_addresses = excluded_addresses.union(set_ni_addresses)
 
@@ -40,6 +41,7 @@ def get_updated_data_records(db, date_from=None, date_to=None, campaign_id=None,
     all_vici_phones = {r.phone for r in db.query(CallRecord.phone).all()}
 
     query = db.query(CallRecord).filter(CallRecord.exclude_keep == "KEEP")
+    if tenant_id: query = query.filter(CallRecord.tenant_id == tenant_id)
     if date_from:
         query = query.filter(CallRecord.call_date >= date_from + " 00:00:00")
     if date_to:
@@ -57,6 +59,7 @@ def get_updated_data_records(db, date_from=None, date_to=None, campaign_id=None,
     ]
 
     skip_query = db.query(SkipTraceRecord)
+    if tenant_id: skip_query = skip_query.filter(SkipTraceRecord.tenant_id == tenant_id)
     if campaign_id:
         skip_query = skip_query.filter(SkipTraceRecord.campaign_id == campaign_id)
     if list_id:
@@ -148,10 +151,11 @@ def upload_to_vici(
     date_from: str = Query(...),
     date_to: str = Query(...),
     campaign_id: str = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_current_tenant)
 ):
     # Paso 1 — validar que hay leads antes de tocar la lista
-    leads = get_updated_data_records(db, date_from, date_to, campaign_id, list_id)
+    leads = get_updated_data_records(db, date_from, date_to, campaign_id, list_id, tenant_id)
 
     if not leads:
         return JSONResponse(

@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, Query
+from app.auth import get_current_tenant
+from app.models import TenantCampaign
 from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models import CallRecord
@@ -10,8 +12,10 @@ from datetime import date
 router = APIRouter()
 
 @router.get("/campaigns")
-def list_campaigns():
-    return get_campaigns()
+def list_campaigns(db: Session = Depends(get_db), tenant_id: str = Depends(get_current_tenant)):
+    all_campaigns = get_campaigns()
+    allowed = {r.campaign_id for r in db.query(TenantCampaign).filter(TenantCampaign.tenant_id == tenant_id).all()}
+    return [c for c in all_campaigns if c["campaign_id"] in allowed]
 
 @router.get("/lists")
 def list_lists(campaign_id: str = Query(None)):
