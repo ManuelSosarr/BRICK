@@ -1,4 +1,3 @@
-from fastapi import APIRouter, Depends, Query, Body
 import httpx
 import os
 from sqlalchemy.orm import Session
@@ -7,6 +6,7 @@ from app.logic_dashboard import build_dashboard
 from app.address_normalizer import normalize_address
 from app.models import CallRecord, ManualExclusion
 from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query, Body
 import requests
 import re
 
@@ -49,29 +49,89 @@ def search_phone(phone: str = Query(...)):
         return {"found": False, "phone": clean_phone}
 
     address = lead["address"]
-    normalized_address = normalize_address(address)
+    normalized_address = normalize_address(address) if address else None
 
-    cursor.execute("""
-        SELECT 
-            vl.phone_number as phone,
-            vll.list_name
-        FROM vicidial_list vl
-        LEFT JOIN vicidial_lists vll ON vl.list_id = vll.list_id
-        WHERE vl.address1 = %s
-    """, (address,))
-    all_leads = cursor.fetchall()
+    # Only group by address if the lead actually has one
+    if address and address.strip():
+        cursor.execute("""
+            SELECT 
+                vl.phone_number as phone,
+                vll.list_name
+            FROM vicidial_list vl
+            LEFT JOIN vicidial_lists vll ON vl.list_id = vll.list_id
+            WHERE vl.address1 = %s
+        """, (address,))
+        all_leads = cursor.fetchall()
 
-    phone_lists = {}
-    for row in all_leads:
-        p = row["phone"]
-        l = row["list_name"] or ""
-        if p not in phone_lists:
-            phone_lists[p] = set()
-        if l:
-            phone_lists[p].add(l)
+        phone_lists = {}
+        for row in all_leads:
+            p = row["phone"]
+            l = row["list_name"] or ""
+            if p not in phone_lists:
+                phone_lists[p] = set()
+            if l:
+                phone_lists[p].add(l)
 
-    property_phones = []
-    for phone_number, lists_set in phone_lists.items():
+        # Single query for all phones at this address
+        all_phones = list(phone_lists.keys())
+        placeholders = ','.join(['%s'] * len(all_phones))
+        cursor.execute(f"""
+            SELECT 
+                vlog.phone_number,
+                vlog.call_date,
+                vlog.status,
+                vs.status_name,
+                vlog.campaign_id,
+                vlog.length_in_sec,
+                vlog.user
+            FROM vicidial_log vlog
+            LEFT JOIN vicidial_statuses vs ON vlog.status = vs.status
+            WHERE vlog.phone_number IN ({placeholders})
+            ORDER BY vlog.phone_number, vlog.call_date DESC
+        """, all_phones)
+        all_calls = cursor.fetchall()
+
+        calls_by_phone = {}
+        for c in all_calls:
+            p = c["phone_number"]
+            if p not in calls_by_phone:
+                calls_by_phone[p] = []
+            if len(calls_by_phone[p]) < 10:
+                calls_by_phone[p].append({
+                    "call_date": str(c["call_date"]),
+                    "status": c["status"],
+                    "status_name": c["status_name"],
+                    "campaign_id": c["campaign_id"],
+                    "length_in_sec": c["length_in_sec"],
+                    "user": c["user"],
+                })
+
+        property_phones = []
+        for phone_number, lists_set in phone_lists.items():
+            property_phones.append({
+                "phone": phone_number,
+                "lists": sorted(list(lists_set)),
+                "calls": calls_by_phone.get(phone_number, [])
+            })
+
+        # Last call for this address
+        cursor.execute("""
+            SELECT 
+                vlog.call_date,
+                vlog.status,
+                vs.status_name,
+                vlog.campaign_id
+            FROM vicidial_log vlog
+            LEFT JOIN vicidial_list vl ON vlog.lead_id = vl.lead_id
+            LEFT JOIN vicidial_statuses vs ON vlog.status = vs.status
+            WHERE vl.address1 = %s
+            ORDER BY vlog.call_date DESC
+            LIMIT 1
+        """, (address,))
+        last_call = cursor.fetchone()
+
+    else:
+        # No address — only show this phone, no property grouping
         cursor.execute("""
             SELECT 
                 vlog.call_date,
@@ -85,12 +145,12 @@ def search_phone(phone: str = Query(...)):
             WHERE vlog.phone_number = %s
             ORDER BY vlog.call_date DESC
             LIMIT 10
-        """, (phone_number,))
+        """, (clean_phone,))
         calls = cursor.fetchall()
 
-        property_phones.append({
-            "phone": phone_number,
-            "lists": sorted(list(lists_set)),
+        property_phones = [{
+            "phone": clean_phone,
+            "lists": [lead["list_name"]] if lead["list_name"] else [],
             "calls": [{
                 "call_date": str(c["call_date"]),
                 "status": c["status"],
@@ -99,22 +159,9 @@ def search_phone(phone: str = Query(...)):
                 "length_in_sec": c["length_in_sec"],
                 "user": c["user"],
             } for c in calls]
-        })
+        }]
 
-    cursor.execute("""
-        SELECT 
-            vlog.call_date,
-            vlog.status,
-            vs.status_name,
-            vlog.campaign_id
-        FROM vicidial_log vlog
-        LEFT JOIN vicidial_list vl ON vlog.lead_id = vl.lead_id
-        LEFT JOIN vicidial_statuses vs ON vlog.status = vs.status
-        WHERE vl.address1 = %s
-        ORDER BY vlog.call_date DESC
-        LIMIT 1
-    """, (address,))
-    last_call = cursor.fetchone()
+        last_call = calls[0] if calls else None
 
     cursor.close()
     conn.close()
