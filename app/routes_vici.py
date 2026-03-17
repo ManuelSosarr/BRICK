@@ -18,8 +18,16 @@ def list_campaigns(db: Session = Depends(get_db), tenant_id: str = Depends(get_c
     return [c for c in all_campaigns if c["campaign_id"] in allowed]
 
 @router.get("/lists")
-def list_lists(campaign_id: str = Query(None)):
-    return get_lists(campaign_id)
+def list_lists(
+    campaign_id: str = Query(None),
+    tenant_id: str = Depends(get_current_tenant),
+    db: Session = Depends(get_db)
+):
+    allowed = {r.campaign_id for r in db.query(TenantCampaign).filter(TenantCampaign.tenant_id == tenant_id).all()}
+    lists = get_lists(campaign_id)
+    if campaign_id:
+        return lists if campaign_id in allowed else []
+    return [l for l in lists if l["campaign_id"] in allowed]
 
 @router.post("/import")
 def import_from_vici(
@@ -27,8 +35,16 @@ def import_from_vici(
     date_to: str = Query(...),
     campaign_id: str = Query(None),
     list_id: str = Query(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_current_tenant)
 ):
+    # Validate campaign belongs to tenant
+    if campaign_id:
+        allowed = {r.campaign_id for r in db.query(TenantCampaign).filter(TenantCampaign.tenant_id == tenant_id).all()}
+        if campaign_id not in allowed:
+            from fastapi import HTTPException
+            raise HTTPException(status_code=403, detail="Campaign not allowed for this tenant")
+
     records = get_call_data(date_from, date_to, campaign_id, list_id)
     week_loaded = date.today().isoformat()
     added = 0
@@ -87,13 +103,13 @@ def import_from_vici(
             flag=classified["flag"],
             exclude_keep=classified["exclude_keep"],
             week_loaded=week_loaded,
+            tenant_id=tenant_id,
         )
         db.add(record)
         added += 1
 
     db.commit()
 
-    # Aplicar reglas de comportamiento post-import
     behavioral_updates = apply_behavioral_rules(db)
 
     return {

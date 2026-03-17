@@ -1,9 +1,10 @@
-from fastapi import APIRouter, UploadFile, File, Form
+from fastapi import APIRouter, UploadFile, File, Form, Depends
 from typing import Optional
 import pandas as pd
 import io
 from datetime import date
 from app.address_normalizer import normalize_address
+from app.auth import get_current_tenant
 
 router = APIRouter()
 
@@ -90,7 +91,8 @@ async def upload_skiptrace(
     platform: str = Form(...),
     source_tag: str = Form(...),
     campaign_id: str = Form(...),
-    list_id: str = Form(...)
+    list_id: str = Form(...),
+    tenant_id: str = Depends(get_current_tenant)
 ):
     content = await file.read()
     df = pd.read_csv(io.BytesIO(content))
@@ -110,9 +112,11 @@ async def upload_skiptrace(
     added = 0
     duplicates = 0
     for r in records:
+        r["tenant_id"] = tenant_id
         existing = db.query(SkipTraceRecord).filter(
             SkipTraceRecord.phone == r["phone"],
-            SkipTraceRecord.address == r["address"]
+            SkipTraceRecord.address == r["address"],
+            SkipTraceRecord.tenant_id == tenant_id
         ).first()
         if not existing:
             db.add(SkipTraceRecord(**r))
@@ -134,11 +138,14 @@ async def upload_skiptrace(
     }
 
 @router.get("/list")
-def list_skiptrace(source: Optional[str] = None):
+def list_skiptrace(
+    source: Optional[str] = None,
+    tenant_id: str = Depends(get_current_tenant)
+):
     from app.database import SessionLocal
     from app.models import SkipTraceRecord
     db = SessionLocal()
-    query = db.query(SkipTraceRecord)
+    query = db.query(SkipTraceRecord).filter(SkipTraceRecord.tenant_id == tenant_id)
     if source:
         query = query.filter(SkipTraceRecord.source == source)
     records = query.all()
