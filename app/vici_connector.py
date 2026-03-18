@@ -317,3 +317,62 @@ def upload_leads_to_vici(leads: list, list_id: str) -> dict:
         "failed": failed,
         "errors": errors[:10]
     }
+
+def get_agent_status(agent_user: str) -> dict:
+    try:
+        response = requests.get(VICI_API_URL, params={
+            "source": "brick",
+            "user": VICI_API_USER,
+            "pass": VICI_API_PASS,
+            "function": "agent_status",
+            "agent_user": agent_user,
+            "stage": "INCALL"
+        }, timeout=5)
+        parts = response.text.strip().split("|")
+        status = parts[0] if len(parts) > 0 else "UNKNOWN"
+        uniqueid = parts[1] if len(parts) > 1 else ""
+        lead_id = parts[2] if len(parts) > 2 else ""
+        campaign_id = parts[3] if len(parts) > 3 else ""
+        phone = parts[8] if len(parts) > 8 else ""
+        return {
+            "status": status,
+            "uniqueid": uniqueid,
+            "lead_id": lead_id,
+            "campaign_id": campaign_id,
+            "phone": phone,
+            "raw": response.text.strip()
+        }
+    except Exception as e:
+        return {"status": "ERROR", "error": str(e)}
+
+
+def update_lead_status(lead_id: str, status: str) -> dict:
+    try:
+        response = requests.get(VICI_API_URL, params={
+            "source": "brick",
+            "user": VICI_API_USER,
+            "pass": VICI_API_PASS,
+            "function": "update_lead",
+            "lead_id": lead_id,
+            "status": status
+        }, timeout=5)
+        success = response.text.strip().startswith("SUCCESS")
+        return {"success": success, "response": response.text.strip()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
+def get_lead_by_id(lead_id: str) -> dict:
+    conn = get_connection()
+    cursor = conn.cursor(dictionary=True)
+    cursor.execute("""
+        SELECT lead_id, first_name, last_name, phone_number, address1,
+               city, state, postal_code, comments, called_count,
+               last_local_call_time, list_id
+        FROM vicidial_list
+        WHERE lead_id = %s
+    """, (lead_id,))
+    result = cursor.fetchone()
+    cursor.close()
+    conn.close()
+    return result or {}

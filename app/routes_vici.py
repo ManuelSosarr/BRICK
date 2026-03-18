@@ -118,3 +118,26 @@ def import_from_vici(
         "behavioral_updates": behavioral_updates,
         "week_loaded": week_loaded
     }
+
+
+@router.get("/agent_status")
+def agent_status(
+    agent_user: str = Query(...),
+    tenant_id: str = Depends(get_current_tenant)
+):
+    from app.vici_connector import get_agent_status, get_lead_by_id
+    status = get_agent_status(agent_user)
+    if status.get("lead_id"):
+        lead = get_lead_by_id(status["lead_id"])
+        status["lead"] = lead
+    return status
+
+
+@router.post("/update_lead")
+def update_lead(
+    lead_id: str = Query(...),
+    status: str = Query(...),
+    tenant_id: str = Depends(get_current_tenant)
+):
+    from app.vici_connector import update_lead_status
+    return update_lead_status(lead_id, status)
