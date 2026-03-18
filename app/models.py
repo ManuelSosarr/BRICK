@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from sqlalchemy.sql import func
 from app.database import Base
 
@@ -110,7 +110,9 @@ class SkipTraceRecord(Base):
     campaign_id = Column(String, index=True)
     list_id = Column(String, index=True)
     date_added = Column(String)
+    synced_to_vici = Column(Boolean, default=False, index=True)
     created_at = Column(DateTime, server_default=func.now())
+
 
 class TenantCampaign(Base):
     __tablename__ = "tenant_campaigns"
