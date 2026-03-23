@@ -27,7 +27,7 @@ def get_flag(status: str, custom_map: dict = None) -> str:
 
 
 def get_exclude_keep(flag: str, carrier_result: str, attempt_count: int) -> str:
-    if flag == "NW":
+    if flag in ("NW", "WNR"):
         return "EXCLUDE"
     if flag == "WNA" and str(carrier_result).upper() == "CONGESTION" and attempt_count == 0:
         return "EXCLUDE"
