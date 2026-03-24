@@ -25,6 +25,11 @@ def clean(value):
 def is_empty_address(address):
     return address in EMPTY_ADDRESS_VALUES or (address and address.strip().upper() == "NONE")
 
+def normalize_phone(phone):
+    if phone and len(phone) == 11 and phone.endswith('0'):
+        return phone[:-1]
+    return phone
+
 def get_current_list_phones(list_id):
     try:
         conn = get_connection()
@@ -33,9 +38,22 @@ def get_current_list_phones(list_id):
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
-        return {r["phone_number"] for r in rows}
+        return {normalize_phone(r["phone_number"]) for r in rows}
     except Exception:
         return set()
+
+def get_current_list_phones_raw(list_id):
+    # Returns mapping of normalized_phone -> original_phone
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT phone_number FROM vicidial_list WHERE list_id = %s", (list_id,))
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        return {normalize_phone(r["phone_number"]): r["phone_number"] for r in rows}
+    except Exception:
+        return {}
 
 def delete_phones_in_batches(list_id, phones, batch_size=500):
     phones_list = list(phones)
@@ -62,8 +80,6 @@ def get_excluded_phones(db, list_id, campaign_id, tenant_id):
     q = db.query(CallRecord.phone).filter(CallRecord.exclude_keep == "EXCLUDE")
     if tenant_id:
         q = q.filter(CallRecord.tenant_id == tenant_id)
-    if campaign_id:
-        q = q.filter(CallRecord.campaign_id == campaign_id)
     if list_id:
         q = q.filter(CallRecord.list_id == list_id)
     return {r.phone for r in q.all() if r.phone}
@@ -189,13 +205,18 @@ def upload_to_vici(
     if campaign_id:
         new_leads_check = new_leads_check.filter(SkipTraceRecord.campaign_id == campaign_id)
     has_new_leads = new_leads_check.count() > 0
+    print(f"DEBUG excluded_phones count: {len(excluded_phones)}, has_new_leads: {has_new_leads}")
     if not excluded_phones and not has_new_leads:
         return {"status": "ok", "message": "Lista ya esta al dia. No hay cambios necesarios.",
                 "deleted": 0, "uploaded": 0, "failed": 0, "total": 0, "errors": []}
-    current_phones = get_current_list_phones(list_id)
+    phone_map = get_current_list_phones_raw(list_id)
+    current_phones = set(phone_map.keys())
+    print(f"DEBUG current_phones count: {len(current_phones)}, phones_to_delete preview: {len(current_phones.intersection(excluded_phones))}")
     if not current_phones:
         return JSONResponse(status_code=400, content={"error": "Lista vacia o no encontrada en ViciDial."})
-    phones_to_delete = current_phones.intersection(excluded_phones)
+    normalized_to_delete = current_phones.intersection(excluded_phones)
+    # Use original phone format for deletion
+    phones_to_delete = {phone_map[p] for p in normalized_to_delete if p in phone_map}
     new_leads = get_new_skiptrace_leads(db, list_id, campaign_id, tenant_id, current_phones)
     if not phones_to_delete and not new_leads:
         return {"status": "ok", "message": "Lista ya esta al dia. No hay cambios necesarios.",
