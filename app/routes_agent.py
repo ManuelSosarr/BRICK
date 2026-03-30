@@ -1,11 +1,25 @@
 from fastapi import APIRouter, Query, Body
 import requests
+import pymysql
 
 router = APIRouter()
 
 VICI_API_URL  = "http://144.126.146.250/vicidial/non_agent_api.php"
 VICI_API_USER = "APIUSER"
 VICI_API_PASS = "APIUSER"
+
+# MySQL via SSH tunnel (must be running on port 3307)
+DB_CONFIG = {
+    "host":   "127.0.0.1",
+    "port":   3307,
+    "user":   "cron",
+    "passwd": "1234",
+    "db":     "asterisk",
+}
+
+
+def get_db():
+    return pymysql.connect(**DB_CONFIG)
 
 
 def vici_call(params: dict) -> str:
@@ -53,31 +67,59 @@ def agent_logout(vici_user: str = Body(...)):
 
 @router.post("/pause")
 def pause_agent(vici_user: str = Body(...)):
-    result = vici_call({
-        "function":   "pause_agent",
-        "agent_user": vici_user,
-        "pause_code": "PAUSE",
-    })
-    return {"ok": True, "response": result}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE vicidial_live_agents SET external_pause = 'PAUSE' WHERE user = %s",
+                (vici_user,)
+            )
+            conn.commit()
+            affected = cur.rowcount
+        conn.close()
+        if affected == 0:
+            return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
+        return {"ok": True, "response": "PAUSED"}
+    except Exception as e:
+        return {"ok": False, "response": f"DB ERROR: {str(e)}"}
 
 
 @router.post("/resume")
 def resume_agent(vici_user: str = Body(...)):
-    result = vici_call({
-        "function":   "pause_agent",
-        "agent_user": vici_user,
-        "pause_code": "RESUME",
-    })
-    return {"ok": True, "response": result}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE vicidial_live_agents SET external_pause = 'RESUME' WHERE user = %s",
+                (vici_user,)
+            )
+            conn.commit()
+            affected = cur.rowcount
+        conn.close()
+        if affected == 0:
+            return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
+        return {"ok": True, "response": "RESUMED"}
+    except Exception as e:
+        return {"ok": False, "response": f"DB ERROR: {str(e)}"}
 
 
 @router.post("/hangup")
 def hangup_lead(vici_user: str = Body(...)):
-    result = vici_call({
-        "function":   "hangup_lead",
-        "agent_user": vici_user,
-    })
-    return {"ok": True, "response": result}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE vicidial_live_agents SET external_hangup = 'Y' WHERE user = %s",
+                (vici_user,)
+            )
+            conn.commit()
+            affected = cur.rowcount
+        conn.close()
+        if affected == 0:
+            return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
+        return {"ok": True, "response": "HANGUP_SENT"}
+    except Exception as e:
+        return {"ok": False, "response": f"DB ERROR: {str(e)}"}
 
 
 @router.post("/dispo")
@@ -86,14 +128,21 @@ def save_dispo(
     lead_id:   str = Body(...),
     dispo:     str = Body(...),
 ):
-    result = vici_call({
-        "function":   "save_dispo",
-        "agent_user": vici_user,
-        "lead_id":    lead_id,
-        "dispo":      dispo,
-    })
-    success = "SUCCESS" in result.upper()
-    return {"ok": success, "response": result}
+    try:
+        conn = get_db()
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE vicidial_live_agents SET external_status = %s WHERE user = %s",
+                (dispo, vici_user)
+            )
+            conn.commit()
+            affected = cur.rowcount
+        conn.close()
+        if affected == 0:
+            return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
+        return {"ok": True, "response": f"DISPO_SET:{dispo}"}
+    except Exception as e:
+        return {"ok": False, "response": f"DB ERROR: {str(e)}"}
 
 
 @router.get("/current")
