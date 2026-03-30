@@ -136,3 +136,30 @@ def get_current_lead(vici_user: str = Query(...)):
         }
     except Exception as e:
         return {"on_call": False, "raw": result, "error": str(e)}
+
+
+@router.post("/vici-login")
+def vici_login(
+    vici_user: str = Body(...),
+    vici_pass: str = Body(...),
+    campaign_id: str = Body(...),
+):
+    from fastapi import HTTPException
+    login_result = vici_call({
+        "function":    "agent_login",
+        "agent_user":  vici_user,
+        "agent_pass":  vici_pass,
+        "campaign_id": campaign_id,
+        "phone_login": vici_user,
+        "phone_pass":  vici_pass,
+        "agent_dial":  "VOIP",
+        "dial_prefix": "",
+    })
+    if "ERROR" in login_result.upper() and "SUCCESS" not in login_result.upper():
+        raise HTTPException(status_code=401, detail="Credenciales de ViciDial incorrectas")
+    return {
+        "ok": True,
+        "vici_user": vici_user,
+        "campaign_id": campaign_id,
+        "login_response": login_result
+    }
