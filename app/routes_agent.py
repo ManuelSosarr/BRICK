@@ -76,6 +76,9 @@ def pause_agent(vici_user: str = Body(...)):
             )
             conn.commit()
             affected = cur.rowcount
+            import time; time.sleep(2)
+            cur.execute("UPDATE vicidial_live_agents SET external_pause = '' WHERE user = %s", (vici_user,))
+            conn.commit()
         conn.close()
         if affected == 0:
             return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
@@ -95,6 +98,9 @@ def resume_agent(vici_user: str = Body(...)):
             )
             conn.commit()
             affected = cur.rowcount
+            import time; time.sleep(2)
+            cur.execute("UPDATE vicidial_live_agents SET external_pause = '' WHERE user = %s", (vici_user,))
+            conn.commit()
         conn.close()
         if affected == 0:
             return {"ok": False, "response": "Agent not found in vicidial_live_agents"}
