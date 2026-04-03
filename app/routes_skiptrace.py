@@ -13,6 +13,17 @@ SKIPGENIE_MOBILE_COLS = [f"MOBILE{i}" for i in range(1, 6)]
 SKIPGENIE_PHONE_COLS = [f"PHONE{i}" for i in range(1, 11)]
 DEALMACHINE_PHONE_COLS = ["phone_1", "phone_2", "phone_3"]
 
+def safe_str(val):
+    if val is None:
+        return ""
+    try:
+        if pd.isna(val):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    s = str(val).strip()
+    return "" if s.upper() in ("NAN", "NONE", "NULL") else s
+
 def clean_phone(phone):
     if not phone or pd.isna(phone):
         return None
@@ -23,9 +34,9 @@ def clean_phone(phone):
 def parse_resimpli(df, source_tag, campaign_id, list_id):
     records = []
     for _, row in df.iterrows():
-        address = normalize_address(str(row.get("Formated_Address", "")).strip())
-        first_name = str(row.get("First_Name", "")).strip()
-        last_name = str(row.get("Last_Name", "")).strip()
+        address = normalize_address(safe_str(row.get("Formated_Address")))
+        first_name = safe_str(row.get("First_Name"))
+        last_name = safe_str(row.get("Last_Name"))
         for col in RESIMPLI_PHONE_COLS:
             phone = clean_phone(row.get(col))
             if phone:
@@ -44,10 +55,10 @@ def parse_resimpli(df, source_tag, campaign_id, list_id):
 def parse_skipgenie(df, source_tag, campaign_id, list_id):
     records = []
     for _, row in df.iterrows():
-        raw_address = f"{row.get('INPUT_ADDRESS', '')} {row.get('INPUT_CITY', '')} {row.get('INPUT_STATE', '')} {row.get('INPUT_ZIPCODE', '')}".strip()
+        raw_address = f"{safe_str(row.get('INPUT_ADDRESS'))} {safe_str(row.get('INPUT_CITY'))} {safe_str(row.get('INPUT_STATE'))} {safe_str(row.get('INPUT_ZIPCODE'))}".strip()
         address = normalize_address(raw_address)
-        first_name = str(row.get("FIRST", "")).strip()
-        last_name = str(row.get("LAST", "")).strip()
+        first_name = safe_str(row.get("FIRST"))
+        last_name = safe_str(row.get("LAST"))
         all_phone_cols = SKIPGENIE_MOBILE_COLS + SKIPGENIE_PHONE_COLS
         for col in all_phone_cols:
             phone = clean_phone(row.get(col))
@@ -67,9 +78,9 @@ def parse_skipgenie(df, source_tag, campaign_id, list_id):
 def parse_dealmachine(df, source_tag, campaign_id, list_id):
     records = []
     for _, row in df.iterrows():
-        address = normalize_address(str(row.get("associated_property_address_full", "")).strip())
-        first_name = str(row.get("first_name", "")).strip()
-        last_name = str(row.get("last_name", "")).strip()
+        address = normalize_address(safe_str(row.get("associated_property_address_full")))
+        first_name = safe_str(row.get("first_name"))
+        last_name = safe_str(row.get("last_name"))
         for col in DEALMACHINE_PHONE_COLS:
             phone = clean_phone(row.get(col))
             if phone:
