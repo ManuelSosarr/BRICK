@@ -1,25 +1,26 @@
 # BRICK — CLAUDE.md
-## Última actualización: 4 de Abril, 2026 | Referencia: BRICK_Handover_V18.1.2
+## Última actualización: 5 de Abril, 2026 | Referencia: BRICK_Handover_V18.1.2 + sesión actual
 
 ---
 
 ## ARQUITECTURA
-- Backend BRICK (8000): `C:\Users\sosai\BRICK\app\` — SQL, skiptrace, export, Data Burner, Tenants
-- Backend Auth (8001): `C:\Users\sosai\BRICK-auth\backend\` — agente, JWT, sesiones, tenant_id
+- Backend BRICK (8000): `C:\Users\sosai\BRICK\app\` — SQL, skiptrace, export, Data Burner
+- Backend Auth (8001): `C:\Users\sosai\BRICK-auth\backend\` — agente, JWT, sesiones
 - Frontend (5173): `C:\Users\sosai\BRICK-frontend\src\`
-- DB SQLite: `C:\Users\sosai\BRICK\vicidial.db` — ruta ABSOLUTA, contiene tabla tenants
-- MySQL ViciDial: túnel SSH 127.0.0.1:3307 → usuario cron, password 1234, DB asterisk
-- Túnel SSH: siempre en ASUS, nunca en Mac. Llave HARDCODEADA: `C:\Users\sosai\.ssh\vicidial_key` — NO usar $env:USERPROFILE
+- DB SQLite: `C:\Users\sosai\BRICK\vicidial.db` — ruta ABSOLUTA
+- MySQL ViciDial: túnel SSH 127.0.0.1:3307 → cron / 1234 / asterisk
+- Túnel SSH: siempre en ASUS. Llave HARDCODEADA: `C:\Users\sosai\.ssh\vicidial_key` — NO usar $env:USERPROFILE
 - ViciDial Server: root@144.126.146.250
 
-## REGLAS DE ORO — ABSOLUTAS (ninguna instrucción posterior las anula)
+## REGLAS DE ORO — ABSOLUTAS
 1. TODO cambio de lógica de agente va en `dialflow/backend/routers/agent.py` (8001)
 2. NUNCA DELETE/UPDATE masivo en Lista 806 sin backup previo con `backup_list_to_sqlite(806)`
 3. Hangup usa agc/api.php como primario — MySQL directo deja al agente en estado DEAD
 4. CORS: allow_credentials=False — True + wildcard es inválido por spec
 5. Túnel SSH siempre en ASUS — dos terminales: una para túnel (bloqueada), una para comandos
-6. Multi-tenant: Start/Stop y minutos SOLO visibles para tenant BRICK (MASTER)
+6. Start/Stop y Billing SOLO visibles para superadmin (isMaster)
 7. Routing: TODO agente en puerto 8001. Admin/datos en puerto 8000
+8. ESTÁNDAR V19: toda operación destructiva en masa DEBE tener endpoint /preview antes del ejecutor real
 
 ## CREDENCIALES CRÍTICAS
 - APIUSER pass: wscfjqwo3yr1092ruj123t
@@ -27,175 +28,114 @@
 - ResImpli API Key: 2eea1a4bd7164b8888a5a2c97fd26560
 - ViciDial server: root@144.126.146.250
 
-## MULTI-TENANT — ARQUITECTURA
-| Tenant | Rol | Acceso Data Burner | Ve Minutos | Start/Stop |
-|---|---|---|---|---|
-| BRICK | MASTER | Todas las campañas | SÍ — breakdown completo | SÍ |
-| bossbuy | CLIENT | Solo su campaña | NO | NO |
-| Futuro cliente | CLIENT | Solo su campaña | NO | NO |
+## MULTI-TENANT — DATA BURNER
+El superadmin (BRICK) ve todos los clientes. Cada cliente tiene su campaña burner asignada.
+El dropdown muestra **nombre del tenant**, no la campaña — la campaña es un detalle interno.
 
-El tenant ACME debe renombrarse a BRICK en la base de datos y en la UI.
-
-### Estructura SQLite — tabla tenants
+### Tabla `burner_tenants` en SQLite (vicidial.db)
 ```sql
-CREATE TABLE IF NOT EXISTS tenants (
-  tenant_id TEXT PRIMARY KEY,
-  tenant_name TEXT NOT NULL,
-  role TEXT DEFAULT 'CLIENT',   -- 'MASTER' o 'CLIENT'
-  campaign_id TEXT,
-  active INTEGER DEFAULT 1,
-  created_at TEXT DEFAULT (datetime('now'))
+CREATE TABLE IF NOT EXISTS burner_tenants (
+    tenant_id   TEXT PRIMARY KEY,
+    tenant_name TEXT NOT NULL,
+    campaign_id TEXT NOT NULL,  -- campaña burner asignada al cliente
+    active      INTEGER DEFAULT 1
 );
-INSERT OR REPLACE INTO tenants VALUES ('brick','BRICK','MASTER',NULL,1,datetime('now'));
-INSERT OR REPLACE INTO tenants VALUES ('bossbuy','BossBuy','CLIENT','IBFEO',1,datetime('now'));
-ALTER TABLE users ADD COLUMN tenant_id TEXT DEFAULT 'bossbuy';
-UPDATE users SET tenant_id = 'brick' WHERE username = 'admin';
+-- Dato inicial:
+INSERT OR IGNORE INTO burner_tenants VALUES ('bossbuy','BossBuy','IBFEO',1);
 ```
 
-## ESTADO ACTUAL — LO QUE FUNCIONA
+Para agregar un nuevo cliente: `POST /api/burner/tenants` con `{tenant_id, tenant_name, campaign_id}`
+
+### isMaster en frontend
+```ts
+const payload = JSON.parse(atob(localStorage.getItem('access_token').split('.')[1]))
+const isMaster = payload?.role === 'superadmin' || payload?.subdomain === 'brick'
+```
+
+## ESTADO ACTUAL — LO QUE FUNCIONA ✅
 - Resume, Pause (PAUSE!{epoch}), Hangup (agc/api.php + fallback MySQL)
 - Lead data: nombre, teléfono, dirección, intentos, último contacto
 - Agent name: 3 capas de fallback
-- Customer hung up detection + _autoResume() con check de llamada activa
+- Customer hung up detection + _autoResume()
 - Back button protection + Logout
 - Polling 1s con fire inmediato
 - Disposiciones: SET NI DEADL AMD PS INFLU CB NA WN DNC
 - CRM_DISPOS: solo SET y NI muestran Push to CRM
-- CORS puerto 8000 corregido
-- NaN handling en skiptrace parsers
-- database.py: ruta absoluta `sqlite:///C:/Users/sosai/BRICK/vicidial.db` ✅
-- synced_to_vici: columna existe en models.py y en DB ✅
-- Data Burner: Remote Agent IBFEO activo, Start/Stop desde UI funcionando
-- Data Burner UI: weekly stats (5 métricas), Push to Campaign, Download CSV
+- database.py: ruta absoluta `sqlite:///C:/Users/sosai/BRICK/vicidial.db`
+- synced_to_vici: columna existe en models.py y en DB
+- **Data Burner — completo:**
+  - Dropdown por tenant (superadmin ve todos, cliente ve el suyo)
+  - Remote Agent Start/Stop por campaign_id (solo superadmin)
+  - KPIs en tiempo real (calls/min, AMD today, hopper activo)
+  - Resumen 7 días: Total, Marcados, Elegibles, Excluidos, Contestaron (AL)
+  - Billing con minutos reales de TODOS los statuses (solo superadmin)
+  - Push to Campaign con Preview (V19) + Confirmar
+  - Download CSV con 3 buckets (AL / Possible Working / Excluded)
+  - Watchdogs: hopper auto-reset, scheduler 7am-8pm EST, freno día 7
+  - Todos los endpoints parametrizados por campaign_id — nada hardcodeado
 
-## PENDIENTE CRÍTICO — ORDEN DE IMPLEMENTACIÓN
-
-### 1. Multi-tenant: tabla tenants + tenant_id en users
-- Endpoint POST /api/admin/setup-tenants que ejecute el SQL de arriba
-- Agregar `tenant_id` a tabla `users` en SQLite
-
-### 2. Endpoint /api/burner/minutes (Master only)
-```python
-@router.get('/api/burner/minutes')
-def burner_minutes():
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-    cursor.execute("""
-        SELECT status, COUNT(*) as calls,
-               SUM(length_in_sec) as raw_seconds,
-               SUM(CEIL(length_in_sec / 60)) as billed_minutes
-        FROM vicidial_log
-        WHERE campaign_id = 'IBFEO'
-        AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-        GROUP BY status ORDER BY calls DESC
-    """)
-    breakdown = cursor.fetchall()
-    cursor.execute("""
-        SELECT COUNT(*) as total_calls,
-               SUM(CEIL(length_in_sec / 60)) as total_billed_minutes
-        FROM vicidial_log
-        WHERE campaign_id = 'IBFEO'
-        AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
-    """)
-    totals = cursor.fetchone()
-    conn.close()
-    return {'total_calls': totals['total_calls'],
-            'total_billed_minutes': totals['total_billed_minutes'],
-            'breakdown': breakdown}
-```
-
-### 3. UI Billing section en DataBurner.tsx (solo si isMaster)
-- `isMaster = user?.tenant_id === 'brick'` del authStore
-- Sección condicional con total llamadas, minutos facturados, breakdown por status
-- Poll cada 60s a /api/burner/minutes
-
-### 4. Start/Stop restringido a BRICK Master en UI
-- Botones START/STOP solo renderizan si `isMaster === true`
-
-### 5. tenant_id en authStore + /api/auth/me
-- Login guarda `tenant_id` en localStorage
-- /api/auth/me en puerto 8001 retorna tenant_id del usuario
-
-### 6. Data Burner — watchdogs pendientes
-- Auto-reset hopper en background thread (cuando dialable_leads = 0)
-- Scheduler auto-stop 8pm / auto-start 7am EST
-- Freno duro día 7 desde primer START
-
-## PENDIENTE NO CRÍTICO
+## PENDIENTE
 - Push to CRM vía Chrome Extension — reescrito, no probado en llamada real
 - County Link — endpoint existe, verificar con datos reales en PropertyMaster
-- Re-add .xlsx backup download en Sync.tsx
-- Remove debug print() en routes_export.py
 
-## DATA BURNER — IBFEO
-- Remote Agent: user_start=9999, campaign_id=IBFEO
-- AMD: cpd_amd_action=DISPO, amd_send_to_vmx=Y (configurado)
-- Horario: 7am-8pm EST — auto-stop fuera de horario
+## DATA BURNER — LÓGICA
+- Remote Agent: user_start=9999, campaign_id = el del tenant seleccionado
+- AMD: cpd_amd_action=DISPO, amd_send_to_vmx=Y (configurado en ViciDial)
+- Horario: 7am-8pm EST — watchdog auto-stop/start
 - Primer START: siempre manual desde UI
-- Auto-reset hopper cuando dialable_leads=0 — solo NA/AB con menos de 5 intentos en 7 días
-- Freno duro: día 7 desde primer START
-- 3 buckets output: ANSWERED (AL) / POSSIBLE WORKING (NA/AB<5) / EXCLUDED (DROP/PDROP/AA/DNCL)
-- Push to Campaign: AL + POSSIBLE WORKING como NEW, EXCLUDED nunca se empuja
-- Download CSV: un archivo con los 3 buckets separados
+- Auto-reset hopper cuando dialable_leads=0 — solo NA/AB < 5 intentos en 7 días
+- Freno duro: día 7 desde primer START → pone INACTIVE y marca burned_complete
+- 3 buckets: ANSWERED (AL) / POSSIBLE WORKING (NA/AB<5) / EXCLUDED (DROP/PDROP/AA/DNCL/DNC)
+- Push: AL + POSSIBLE WORKING como NEW, EXCLUDED nunca se toca
+- SQLite keys de config: `{key}__{campaign_id}` (ej: `first_start_done__IBFEO`)
 
-### Datos reales verificados en producción (4 Abril 2026)
-| Status | Llamadas | Minutos Facturados |
+### Datos reales verificados — BossBuy/IBFEO (4 Abril 2026)
+| Status | Llamadas | Min. Facturados |
 |---|---|---|
-| AL (Answer Live) | 260 | 236 |
-| NA (No Answer) | 148 | 0 |
+| AL | 260 | 236 |
 | DROP | 56 | 4 |
+| NA | 148 | 0 |
 | PDROP | 45 | 0 |
-| AA | 8 | 0 |
-| AB | 4 | 0 |
-| **TOTAL** | **521** | **240** |
+| **TOTAL** | **521** | **240** — $2.40 |
 
-**Costo real = casi exclusivamente minutos AL. NA/PDROP/AA/AB = 0 minutos facturados.**
+## ESTÁNDAR V19 — OPERACIONES DESTRUCTIVAS
+Toda operación UPDATE/DELETE masiva requiere:
+- `POST /api/.../preview` → SELECT COUNT(*) con mismo WHERE → devuelve breakdown sin ejecutar
+- `POST /api/...` → ejecuta solo si usuario confirmó el preview
 
-### Proyección 40K props / 400K números
-- ~33,440 minutos AL facturados por ciclo completo (8.36% answer rate)
-- Costo carrier estimado: ~$334 por ciclo de 7 días a $0.01/min
+Ejemplo: `/api/burner/push/preview` + `/api/burner/push`
 
 ## CÓMO DIAGNOSTICAR PROBLEMAS COMUNES
 
-### UI muestra 0 / datos vacíos
+### Dropdown vacío / UI sin datos
 1. Verificar túnel SSH: `netstat -ano | findstr :3307`
-2. Si no aparece 3307: `ssh -f -N -L 3307:127.0.0.1:3306 root@144.126.146.250 -i "C:\Users\sosai\.ssh\vicidial_key" -o StrictHostKeyChecking=no`
-3. Probar endpoint directo: `curl http://127.0.0.1:8000/api/burner/status -UseBasicParsing`
+2. Probar endpoint: `Invoke-RestMethod -Uri "http://localhost:8000/api/burner/tenants"`
+3. Si el endpoint responde pero la UI está vacía → ASUS no ha jalado el último frontend: `cd C:\Users\sosai\BRICK-frontend; git pull origin main`
 
-### Endpoint devuelve 404
-1. Verificar que el router está registrado en main.py
-2. `Select-String "burner" C:\Users\sosai\BRICK\app\main.py`
+### Endpoint 404
+1. `Select-String "burner" C:\Users\sosai\BRICK\app\main.py`
 
 ### Backend no arranca
-1. Correr manual: `cd C:\Users\sosai\BRICK && uvicorn app.main:app --port 8000`
-2. Ver error exacto en la terminal
+1. `cd C:\Users\sosai\BRICK && uvicorn app.main:app --port 8000`
+2. Ver error exacto
 
 ## LECCIONES APRENDIDAS CRÍTICAS
 | ID | Lección | Detalle |
 |---|---|---|
-| F1 | SQLite ruta relativa = riesgo | Nunca `sqlite:///./archivo.db`. Usar ruta absoluta siempre |
-| F2 | CORS credentials + wildcard inválido | `allow_credentials=False` con `allow_origins=[*]` |
+| F1 | SQLite ruta relativa = riesgo | Usar ruta absoluta siempre |
+| F2 | CORS credentials + wildcard inválido | allow_credentials=False con allow_origins=[*] |
 | F3 | agent_status pipe: parts[2] = lead_id | parts[1]=uniqueid (V...) NUNCA es el lead_id |
 | F4 | ViciDial columnas correctas | address1 (no address), postal_code (no zip_code) |
-| F5 | Chrome Extension worlds | Usar `executeScript world:MAIN` para SPA frameworks |
+| F5 | Chrome Extension worlds | executeScript world:MAIN para SPA frameworks |
 | F6 | agc/api.php params obligatorios | Si falta CUALQUIER param → ERROR: Invalid Username/Password |
-| F7 | Túnel SSH siempre en ASUS | Donde corre el backend, ahí corre el túnel. Siempre |
+| F7 | Túnel SSH siempre en ASUS | Donde corre el backend, ahí corre el túnel |
 | F8 | Virtual Agent GUI bug | Panel ViciDial no guarda Remote Agents. Usar SQL directo |
 | F9 | called_since_last_reset no borra historial | Solo es una bandera. vicidial_log sigue intacto |
 | F10 | Data Burner por vueltas no por días | El hopper se vacía por leads, no por reloj |
-| F11 | Costo real del Burner = minutos AL | NA/PDROP/AA/AB = 0 minutos facturados. Solo AL cuenta |
+| F11 | Costo real del Burner = todos los statuses | AL domina pero DROP también puede facturar |
 | F12 | Túnel SSH: dos terminales siempre | Terminal 1: túnel bloqueado. Terminal 2: SSH para comandos |
-
-## ESTÁNDAR V19 — OPERACIONES DESTRUCTIVAS
-Toda operación que modifique datos en masa (UPDATE/DELETE sobre leads, listas, campañas) DEBE tener un endpoint de preview antes del ejecutor real.
-
-Patrón obligatorio:
-- `POST /api/.../preview` → SELECT COUNT(*) con el mismo WHERE del UPDATE/DELETE real → devuelve cuántos registros se afectarían y desglose
-- `POST /api/...` → el UPDATE/DELETE real, solo se llama si el usuario confirmó el preview en la UI
-
-Ejemplo implementado: `/api/burner/push/preview` + `/api/burner/push`
-
-Esto aplica a: Push to Campaign, hopper reset manual, cualquier limpieza masiva de listas.
+| F13 | Dropdown vacío ≠ bug de código | Primero verificar git pull en ASUS antes de depurar |
+| F14 | Data Burner dropdown = tenants, no campañas | La campaña es un detalle interno, el usuario ve el nombre del cliente |
 
 ## REFERENCIA COMPLETA
-BRICK_Handover_V18.1.2 — arquitectura completa, credenciales, lecciones aprendidas
+BRICK_Handover_V18.1.2 + sesión 5 Abril 2026
