@@ -1,168 +1,92 @@
-# BRICK Platform — Claude Code Instructions
-
-## READ THIS ENTIRE FILE BEFORE TOUCHING ANYTHING
-
-You are Claude Code working on the BRICK platform. Your role is **executor**, not decision-maker.
-You write code, run commands, and verify results. You do NOT improvise, redesign, or make architectural decisions.
+# BRICK — CLAUDE.md
+## Última actualización: 4 de Abril, 2026 | Referencia: BRICK_Handover_Enhanced_V17.docx
 
 ---
 
-## STEP 1 — VERIFY STATE BEFORE EVERY SESSION
+## ARQUITECTURA
+- Backend BRICK (8000): `C:\Users\sosai\BRICK\app\` — SQL, skiptrace, export, Data Burner
+- Backend Auth (8001): `C:\Users\sosai\BRICK-auth\backend\` — agente, JWT, sesiones
+- Frontend (5173): `C:\Users\sosai\BRICK-frontend\src\`
+- DB SQLite: `C:\Users\sosai\BRICK\vicidial.db` — ruta ABSOLUTA, no relativa
+- MySQL ViciDial: túnel SSH 127.0.0.1:3307 → usuario cron, password 1234, DB asterisk
+- Túnel SSH: siempre en ASUS, nunca en Mac. Llave: `C:\Users\sosai\.ssh\vicidial_key`
 
-Run these commands first. Every single session. No exceptions.
+## REGLAS DE ORO
+1. TODO cambio de lógica de agente va en `dialflow/backend/routers/agent.py` (8001)
+2. NUNCA DELETE/UPDATE masivo en Lista 806 sin backup previo con `backup_list_to_sqlite(806)`
+3. Hangup usa agc/api.php como primario — MySQL directo deja al agente en estado DEAD
+4. CORS: allow_credentials=False — True + wildcard es inválido por spec
 
-**In ASUS PowerShell:**
-```powershell
-cd C:\Users\sosai\BRICK && git branch && git log --oneline -3
-cd C:\Users\sosai\BRICK-auth && git branch && git log --oneline -3
-cd C:\Users\sosai\BRICK-frontend && git branch && git status
-```
+## CREDENCIALES CRÍTICAS
+- APIUSER pass: wscfjqwo3yr1092ruj123t
+- MySQL ViciDial: cron / 1234 / asterisk
+- ResImpli API Key: 2eea1a4bd7164b8888a5a2c97fd26560
+- ViciDial server: root@144.126.146.250
 
-**Verify critical patches exist:**
-```powershell
-findstr "wscfjqwo" C:\Users\sosai\BRICK-auth\backend\config.py
-findstr "PAUSE!" C:\Users\sosai\BRICK-auth\backend\routers\agent.py
-findstr "pymysql" C:\Users\sosai\BRICK\app\routes_agent.py
-findstr "brickClient" C:\Users\sosai\BRICK-frontend\src\pages\Agent.tsx
-```
+## ESTADO ACTUAL — LO QUE FUNCIONA
+- Resume, Pause (PAUSE!{epoch}), Hangup (agc/api.php + fallback MySQL)
+- Lead data: nombre, teléfono, dirección, intentos, último contacto
+- Agent name: 3 capas de fallback
+- Customer hung up detection
+- _autoResume() con check de llamada activa
+- Back button protection + Logout
+- Polling 1s con fire inmediato
+- Disposiciones: SET NI DEADL AMD PS INFLU CB NA WN DNC
+- CRM_DISPOS: solo SET y NI muestran Push to CRM
+- CORS puerto 8000 corregido
+- NaN handling en skiptrace parsers
+- Data Burner: Remote Agent IBFEO activo, Start/Stop desde UI funcionando
 
-Each command must return a result. If any returns nothing, DO NOT PROCEED. Report to Manuel immediately.
+## PENDIENTE CRÍTICO
+1. Fix Sync/Dashboard/Backup — columna synced_to_vici no existe en DB que usa uvicorn
+   - Migrar: ALTER TABLE skiptrace_records ADD COLUMN synced_to_vici BOOLEAN DEFAULT 0
+   - Fix permanente: cambiar database.py a ruta absoluta C:/Users/sosai/BRICK/vicidial.db
+2. Push to CRM vía Chrome Extension — reescrito, no probado en llamada real
+3. County Link — endpoint existe, verificar con datos reales en PropertyMaster
 
-**Verify ViciDial API (open in browser on ASUS):**
-```
-http://144.126.146.250/vicidial/non_agent_api.php?source=test&user=APIUSER&pass=wscfjqwo3yr1092ruj123t&function=version
-```
-Expected: `VERSION: 2.14...` — If it returns `BAD`, the ASUS IP changed. Stop and report.
+## DATA BURNER — IBFEO
+- Remote Agent: user_start=9999, campaign_id=IBFEO
+- Horario: 7am-8pm EST — auto-stop fuera de horario
+- Primer START: siempre manual desde UI
+- Auto-reset hopper cuando dialable_leads=0 — solo NA/AB con menos de 5 intentos en 7 días
+- Freno duro: día 7 desde primer START
+- 3 buckets output: ANSWERED (AL) / POSSIBLE WORKING (NA/AB<5) / EXCLUDED (DROP/PDROP/AA/DNCL)
+- Push to Campaign: AL + POSSIBLE WORKING como NEW, EXCLUDED nunca se empuja
+- Download CSV: un archivo con los 3 buckets separados
 
----
+## DATA BURNER — PENDIENTE DE IMPLEMENTAR
+1. UI acumulado semanal: Total / Dialed / Dialable / Excluded / Answered
+2. Auto-reset hopper en background thread
+3. Auto-stop 8pm / Auto-start 7am EST scheduler
+4. Freno duro día 7
+5. Push to Campaign con dropdown
+6. Download CSV 3 buckets
 
-## STEP 2 — RULES YOU CANNOT BREAK
+## LECCIONES APRENDIDAS CRÍTICAS
+- agent_status pipe: parts[1]=uniqueid (V...), parts[2]=lead_id real — NUNCA usar parts[1]
+- ViciDial columnas: address1 (no address), postal_code (no zip_code)
+- SQLite ruta relativa = riesgo — migración puede aplicarse al archivo equivocado
+- Chrome Extension: content.js=isolated world, Angular=main world — usar executeScript world:MAIN
+- agc/api.php: si falta cualquier parámetro → ERROR: Invalid Username/Password
+- Túnel SSH siempre en ASUS — si corre en Mac, el backend en ASUS no lo alcanza
 
-### Git Rules
-- NEVER run `git reset --hard` without first running `git status` and confirming there are no unpushed local changes
-- NEVER run `git merge`, `git rebase`, or `git checkout -b` without explicit approval from Manuel
-- ALWAYS push to GitHub before telling Manuel you are done — unpushed code does not exist
-- BRICK-auth ASUS local branch is `master`. To push to GitHub: `git push origin master:main`
-- BRICK and BRICK-frontend use `main` branch
+## CÓMO DIAGNOSTICAR PROBLEMAS COMUNES
+### UI muestra 0 / datos vacíos
+1. Verificar túnel SSH: `netstat -ano | findstr :3307`
+2. Si no aparece 3307: `ssh -f -N -L 3307:127.0.0.1:3306 root@144.126.146.250 -i "C:\Users\sosai\.ssh\vicidial_key" -o StrictHostKeyChecking=no`
+3. Probar endpoint directo: `curl http://127.0.0.1:8000/api/burner/status -UseBasicParsing`
 
-### Python/pip Rules
-- NEVER run `pip install -r requirements.txt` — it breaks bcrypt and sqlalchemy
-- If you must install a package, IMMEDIATELY after run: `pip install bcrypt==4.0.1`
-- NEVER write Python inline with `-c` for multi-line scripts — use a `.py` file
+### Endpoint devuelve 404
+1. Verificar que el router está registrado en main.py
+2. `Select-String "burner" C:\Users\sosai\BRICK\app\main.py`
 
-### File Editing Rules (ASUS IBM850 encoding)
-- NEVER use `Set-Content` with special characters like `!`, `{`, `}`, `$`, `@`
-- ALWAYS write Python scripts using this pattern:
-```powershell
-Set-Content script.py -Encoding UTF8 -Value @'
-# your python code here
-'@
-python script.py
-```
-- ALWAYS verify the patch was applied with `findstr` before committing
-- If `findstr` returns nothing after applying a patch, the patch failed — try again
+### Backend no arranca
+1. Correr manual: `cd C:\Users\sosai\BRICK && uvicorn app.main:app --port 8000`
+2. Ver error exacto en la terminal
 
-### Process Rules
-- ALWAYS kill Python before restarting: `Get-Process python | Stop-Process -Force`
-- ALWAYS delete `__pycache__` when a code change is not being picked up:
-```powershell
-Remove-Item -Recurse -Force C:\Users\sosai\BRICK-auth\backend\routers\__pycache__
-```
-- ALWAYS specify which terminal each command runs in: **ASUS PowerShell**, **Mac Terminal**, or **SSH Server (vmi2377273)**
+### Sync/Dashboard/Backup falla
+- Causa: columna synced_to_vici no existe en vicidial.db que usa uvicorn
+- Ver sección PENDIENTE CRÍTICO punto 1
 
-### ViciDial Rules
-- NEVER touch campaigns outside the IBF prefix
-- NEVER modify server-wide ViciDial settings
-- NEVER assume a ViciDial API function exists — verify in the PHP file first
-
----
-
-## STEP 3 — ARCHITECTURE YOU MUST KNOW
-
-### Two Backends — Both Must Be Kept in Sync
-| Backend | Port | Agent File |
-|---|---|---|
-| BRICK | 8000 | `C:\Users\sosai\BRICK\app\routes_agent.py` |
-| BRICK-auth | 8001 | `C:\Users\sosai\BRICK-auth\backend\routers\agent.py` |
-
-When you fix a bug in agent control, fix it in BOTH files. They must be identical in logic.
-
-### Frontend Client Routing
-- `brickClient` (port 8000): Resume, Pause, Hangup, Dispo, Push-CRM, Logout buttons
-- `client` (port 8001): Lead polling every 3 seconds (`/api/agent/lead/{user}`)
-
-### ViciDial MySQL Direct — How Agent Control Works
-The ViciDial API does NOT have pause_agent, hangup_lead, or save_dispo in this version (2.14-197).
-We bypass the API and write directly to MySQL via SSH tunnel on port 3307.
-
-| Action | SQL |
-|---|---|
-| Resume | `UPDATE vicidial_live_agents SET external_pause = 'RESUME' WHERE user = ?` |
-| Pause | `UPDATE vicidial_live_agents SET external_pause = CONCAT('PAUSE!', UNIX_TIMESTAMP()) WHERE user = ?` |
-| Hangup | `UPDATE vicidial_live_agents SET external_hangup = 'Y' WHERE user = ?` |
-| Dispo | `UPDATE vicidial_live_agents SET external_status = ? WHERE user = ?` |
-
-**CRITICAL: PAUSE requires the epoch timestamp format `PAUSE!{unix_timestamp}`. Plain `PAUSE` is ignored by ViciDial.**
-
-### ViciDial Credentials
-- API URL: `http://144.126.146.250/vicidial/non_agent_api.php`
-- API User: `APIUSER`
-- API Pass: `wscfjqwo3yr1092ruj123t`
-- MySQL tunnel: `host=127.0.0.1, port=3307, user=cron, pass=1234, db=asterisk`
-
-### agent_status Response Format
-```
-STATUS|lead_id|sub_status|campaign|user_level|full_name|group|calls_today|phone|address|...
-```
-Only return lead data to frontend when `STATUS == 'INCALL'`. All other statuses return `{"lead": null}`.
-
----
-
-## STEP 4 — CURRENT PENDING WORK (in order of priority)
-
-1. **Hangup button** — `UPDATE external_hangup='Y'`, reset to `''` after 2s. Open dispo panel after.
-2. **Customer hung up detection** — When polling detects status changed from INCALL to non-INCALL without agent clicking Hangup, show alert: "Customer hung up — Please set disposition"
-3. **Dispo saves to ViciDial** — `external_status` UPDATE already in code. Verify end-to-end during real call.
-4. **Add missing dispositions** — Add to `DISPOSITIONS` in `Agent.tsx`: AMD (Answer Machine), PS (Phone Screener), INFLU (Influencer). Add to `STATUS_MAP` in `logic_classification.py`.
-5. **Push to CRM (Zapier → ResImpli)** — POST to `ZAPIER_WEBHOOK_URL` in `config.py`. URL not configured yet.
-6. **Auto-return to waiting after dispo** — After saving dispo, automatically call Resume.
-7. **Logout from both BRICK and ViciDial** — `handleLogout` must call `agent_logout` API then clear localStorage. Remove Quit button.
-8. **Back button protection** — Auto-logout if agent presses back while logged in.
-9. **Push BRICK-frontend patches** — Verify brickClient patches are pushed to GitHub.
-10. **Remove debug print()** — Remove from `routes_export.py`.
-11. **Re-add .xlsx backup download** — Add as separate button in `Sync.tsx`.
-
----
-
-## STEP 5 — HOW TO DIAGNOSE COMMON PROBLEMS
-
-### Button does nothing in UI
-1. Check browser console for errors
-2. Check if `viciUser` is empty: add `console.log('viciUser:', viciUser)` temporarily
-3. Check if button `disabled` condition matches current status
-4. Check backend log for the POST request
-
-### POST arrives at backend but DB does not change
-1. Add `print(f">>> HIT {payload.vici_user}")` inside the function
-2. If print does not appear: delete `__pycache__` and restart backend
-3. If print appears but DB unchanged: check the SQL value format, check MySQL tunnel is active on port 3307
-
-### ViciDial ignores MySQL write
-1. Verify field value format (PAUSE requires `PAUSE!{epoch}`)
-2. Verify agent is in correct status for that operation
-3. Check on ViciDial server: `mysql -u root asterisk -e "SELECT user, status, external_pause, external_hangup FROM vicidial_live_agents WHERE user='3020';"`
-
-### Git does not detect file change
-1. Run `git diff filename` — if nothing, git sees the content as identical to last commit
-2. Force-write the file with a Python script that opens, modifies, and saves it
-3. Run `git diff filename` again — if still nothing, the byte content is identical to what GitHub has
-
-### SSH tunnel fails from ASUS
-1. Open in ASUS browser: `http://144.126.146.250/vicidial/non_agent_api.php?source=test&user=APIUSER&pass=wscfjqwo3yr1092ruj123t&function=version`
-2. If returns `BAD`: ASUS IP changed — update iptables on ViciDial server from Mac
-3. On ViciDial server: `iptables -I INPUT -s NEW_IP -j ACCEPT -m comment --comment "ASUS Manuel"`
-
----
-
-## REFERENCE — Full documentation in BRICK_Handover_v16.docx
-For complete architecture, credentials, lessons learned, and roadmap — read the handover document.
+## REFERENCIA COMPLETA
+BRICK_Handover_Enhanced_V17.docx — arquitectura completa, credenciales, lecciones aprendidas
