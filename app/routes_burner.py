@@ -168,7 +168,8 @@ def _process_schedule(campaign_id: str, hour: int):
             conn.commit()
         elif agent["status"] == "INACTIVE":
             burned = get_burner_config(campaign_id, "burned_complete")
-            if not burned and 7 <= hour < 20:
+            manual_stop = get_burner_config(campaign_id, "manual_stop")
+            if not burned and manual_stop != "true" and 7 <= hour < 20:
                 cur.execute("UPDATE vicidial_remote_agents SET status='ACTIVE' WHERE campaign_id=%s", (campaign_id,))
                 conn.commit()
     cur.close()
@@ -315,9 +316,13 @@ def burner_toggle(payload: dict):
     if action not in ("START", "STOP"):
         return {"ok": False, "response": "Invalid action. Use START or STOP."}
     new_status = "ACTIVE" if action == "START" else "INACTIVE"
-    if action == "START" and not get_burner_config(campaign_id, "first_start_done"):
-        set_burner_config(campaign_id, "first_start_done", "true")
-        set_burner_config(campaign_id, "start_date", date.today().isoformat())
+    if action == "START":
+        set_burner_config(campaign_id, "manual_stop", "false")
+        if not get_burner_config(campaign_id, "first_start_done"):
+            set_burner_config(campaign_id, "first_start_done", "true")
+            set_burner_config(campaign_id, "start_date", date.today().isoformat())
+    elif action == "STOP":
+        set_burner_config(campaign_id, "manual_stop", "true")
     try:
         conn = get_connection()
         cur = conn.cursor()
