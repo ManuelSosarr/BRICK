@@ -1,4 +1,5 @@
 from fastapi import APIRouter, Depends, Query
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.auth import get_current_tenant
 from app.models import TenantCampaign
 from sqlalchemy.orm import Session
@@ -8,12 +9,29 @@ from app.logic_classification import classify_row, apply_behavioral_rules
 from app.vici_connector import get_campaigns, get_lists, get_call_data
 from app.address_normalizer import normalize_address
 from datetime import date
+from jose import jwt, JWTError
+import os
 
 router = APIRouter()
+_security = HTTPBearer(auto_error=False)
+_SECRET = os.getenv("SECRET_KEY", "dev-secret-key-change-in-production")
+
+def _get_role(credentials: HTTPAuthorizationCredentials = Depends(_security)) -> str:
+    try:
+        payload = jwt.decode(credentials.credentials, _SECRET, algorithms=["HS256"])
+        return payload.get("role", "")
+    except Exception:
+        return ""
 
 @router.get("/campaigns")
-def list_campaigns(db: Session = Depends(get_db), tenant_id: str = Depends(get_current_tenant)):
+def list_campaigns(
+    db: Session = Depends(get_db),
+    tenant_id: str = Depends(get_current_tenant),
+    role: str = Depends(_get_role),
+):
     all_campaigns = get_campaigns()
+    if role == "superadmin":
+        return all_campaigns
     allowed = {r.campaign_id for r in db.query(TenantCampaign).filter(TenantCampaign.tenant_id == tenant_id).all()}
     return [c for c in all_campaigns if c["campaign_id"] in allowed]
 
