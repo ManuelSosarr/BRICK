@@ -19,6 +19,46 @@ router = APIRouter()
 DB_PATH = "C:/Users/sosai/BRICK/vicidial.db"
 
 
+# ─── Burner tenants (tenant → campaign mapping) ───────────────────────────────
+
+def _init_burner_tenants(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS burner_tenants (
+            tenant_id   TEXT PRIMARY KEY,
+            tenant_name TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            active      INTEGER DEFAULT 1
+        )
+    """)
+    cur.execute("INSERT OR IGNORE INTO burner_tenants VALUES ('bossbuy','BossBuy','IBFEO',1)")
+
+@router.get("/tenants")
+def burner_tenants():
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    _init_burner_tenants(cur)
+    conn.commit()
+    cur.execute("SELECT tenant_id, tenant_name, campaign_id FROM burner_tenants WHERE active=1 ORDER BY tenant_name")
+    rows = [{"tenant_id": r[0], "tenant_name": r[1], "campaign_id": r[2]} for r in cur.fetchall()]
+    conn.close()
+    return rows
+
+@router.post("/tenants")
+def upsert_burner_tenant(payload: dict):
+    tenant_id   = str(payload.get("tenant_id", "")).strip()
+    tenant_name = str(payload.get("tenant_name", "")).strip()
+    campaign_id = str(payload.get("campaign_id", "")).strip()
+    if not tenant_id or not tenant_name or not campaign_id:
+        return {"ok": False, "error": "tenant_id, tenant_name and campaign_id required"}
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    _init_burner_tenants(cur)
+    cur.execute("INSERT OR REPLACE INTO burner_tenants VALUES (?,?,?,1)", (tenant_id, tenant_name, campaign_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True}
+
+
 # ─── SQLite helpers (campaign-scoped keys) ────────────────────────────────────
 
 def _cfg_key(campaign_id: str, key: str) -> str:
