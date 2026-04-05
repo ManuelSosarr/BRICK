@@ -1,11 +1,14 @@
 import sqlite3
 import datetime as dt
-from fastapi import APIRouter
+import requests as http
+from fastapi import APIRouter, Header
+from typing import Optional
 from app.vici_connector import get_connection
 
 router = APIRouter()
 
-DB_PATH = "C:/Users/sosai/BRICK/vicidial.db"
+DB_PATH       = "C:/Users/sosai/BRICK/vicidial.db"
+AUTH_BASE_URL = "http://localhost:8001"
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -123,12 +126,40 @@ def admin_provision_validate(payload: dict):
 # ─── Provision — execute ──────────────────────────────────────────────────────
 
 @router.post("/provision")
-def admin_provision(payload: dict):
-    client_name = str(payload.get("client_name", "")).strip()
-    campaigns   = payload.get("campaigns", [])
+def admin_provision(payload: dict, authorization: Optional[str] = Header(None)):
+    client_name    = str(payload.get("client_name",     "")).strip()
+    subdomain      = str(payload.get("subdomain",       "")).strip().lower()
+    admin_email    = str(payload.get("admin_email",     "")).strip()
+    admin_password = str(payload.get("admin_password",  "")).strip()
+    admin_first    = str(payload.get("admin_first_name","")).strip()
+    admin_last     = str(payload.get("admin_last_name", "")).strip()
+    campaigns      = payload.get("campaigns", [])
 
-    if not client_name or not campaigns:
-        return {"ok": False, "errors": ["client_name y campaigns son requeridos"], "results": []}
+    if not client_name or not subdomain or not admin_email or not admin_password or not campaigns:
+        return {"ok": False, "errors": ["Faltan campos requeridos"], "results": []}
+
+    # ── Step 0: Create tenant + admin user in Auth backend (8001) ─────────────
+    try:
+        auth_resp = http.post(
+            f"{AUTH_BASE_URL}/api/tenants",
+            json={
+                "name":             client_name,
+                "subdomain":        subdomain,
+                "industry":         "rei",
+                "primary_color":    "#2563EB",
+                "max_seats":        10,
+                "admin_email":      admin_email,
+                "admin_password":   admin_password,
+                "admin_first_name": admin_first,
+                "admin_last_name":  admin_last,
+            },
+            headers={"Authorization": authorization or ""},
+            timeout=15,
+        )
+        if auth_resp.status_code not in (200, 201):
+            return {"ok": False, "errors": [f"Auth backend error: {auth_resp.text}"], "results": []}
+    except Exception as e:
+        return {"ok": False, "errors": [f"No se pudo conectar al auth backend: {str(e)}"], "results": []}
 
     results = []
     errors  = []
