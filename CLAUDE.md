@@ -28,6 +28,38 @@
 - ResImpli API Key: 2eea1a4bd7164b8888a5a2c97fd26560
 - ViciDial server: root@144.126.146.250
 
+## TENANT MANAGER — WORKFLOW (V2, Abril 2026)
+ViciDial es source of truth. Campañas, Listas y DIDs se crean MANUALMENTE en ViciDial.
+BRICK solo registra lo que ya existe en ViciDial via Sync.
+
+### Flujo para nuevo cliente:
+1. Crear campaña(s), lista(s) y DIDs en ViciDial Admin UI
+2. En BRICK → Tenant Manager → "Sync desde ViciDial"
+   - Selecciona las campañas del cliente (aparecen las no asignadas)
+   - Llena: tenant name, subdomain, admin email/password
+   - Ejecutar → crea auth tenant en 8001 (PostgreSQL) + filas SQLite en BRICK
+3. En "Users" tab → crear agentes, supervisores, etc. para el tenant
+
+### Endpoints relevantes (BRICK 8000):
+- `GET  /api/admin/vici/campaigns/unassigned` — campañas en ViciDial sin BRICK tenant
+- `POST /api/admin/tenants/sync`              — registra tenant (llama a 8001 + SQLite)
+- `GET  /api/admin/scripts/{campaign_id}`     — obtiene script de llamada
+- `PUT  /api/admin/scripts/{campaign_id}`     — guarda script de llamada
+- Scripts guardados en SQLite tabla `campaign_scripts`
+
+### Endpoints relevantes (Auth 8001):
+- `GET  /api/admin/tenants-with-users` — todos los tenants con conteo de usuarios activos
+- `GET  /api/admin/users`              — todos los usuarios (filtro por tenant_id, role, is_active)
+- `POST /api/admin/users`              — crea user para cualquier tenant (superadmin only)
+- `PATCH /api/admin/users/{id}`        — edita rol, vici_user, password
+- `DELETE /api/admin/users/{id}`       — desactiva user
+
+### SSH desde Mac (key en ~/.ssh/vicidial_key):
+```bash
+chmod 600 ~/.ssh/vicidial_key
+ssh -i ~/.ssh/vicidial_key root@144.126.146.250 "mysql -u cron -p1234 asterisk -e \"SELECT ...\""
+```
+
 ## MULTI-TENANT — DATA BURNER
 El superadmin (BRICK) ve todos los clientes. Cada cliente tiene su campaña burner asignada.
 El dropdown muestra **nombre del tenant**, no la campaña — la campaña es un detalle interno.

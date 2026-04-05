@@ -23,19 +23,30 @@ def _init_tenants(cur):
             active      INTEGER DEFAULT 1
         )
     """)
-    cur.execute("INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id) VALUES ('bossbuy','BossBuy','IBFEO')")
+    # auto-migrate from burner_tenants if exists
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='burner_tenants'")
+    if cur.fetchone():
+        cur.execute("SELECT tenant_id, tenant_name, campaign_id, active FROM burner_tenants")
+        for r in cur.fetchall():
+            cur.execute(
+                "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id, active) VALUES (?,?,?,?)", r
+            )
+    cur.execute(
+        "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id) VALUES ('bossbuy','BossBuy','IBFEO')"
+    )
 
 
-def _clean(v):
-    """Convert Python datetime/date to string for MySQL re-insert."""
-    if isinstance(v, dt.datetime):
-        return v.strftime('%Y-%m-%d %H:%M:%S')
-    if isinstance(v, dt.date):
-        return v.strftime('%Y-%m-%d')
-    return v
+def _init_scripts(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS campaign_scripts (
+            campaign_id TEXT PRIMARY KEY,
+            script      TEXT NOT NULL DEFAULT '',
+            updated_at  TEXT
+        )
+    """)
 
 
-# ─── Tenant CRUD ──────────────────────────────────────────────────────────────
+# ─── Tenants CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/tenants")
 def admin_list_tenants():
@@ -60,7 +71,7 @@ def admin_toggle_tenant(tenant_id: str):
     row = cur.fetchone()
     if not row:
         conn.close()
-        return {"ok": False, "error": f"Tenant '{tenant_id}' not found"}
+        return {"ok": False, "error": f"Tenant '{tenant_id}' no encontrado"}
     new_active = 0 if row[0] == 1 else 1
     cur.execute("UPDATE tenants SET active=? WHERE tenant_id=?", (new_active, tenant_id))
     conn.commit()
@@ -68,82 +79,84 @@ def admin_toggle_tenant(tenant_id: str):
     return {"ok": True, "tenant_id": tenant_id, "active": bool(new_active)}
 
 
-# ─── Provision — validate (V19 preview) ──────────────────────────────────────
+@router.delete("/tenants/{tenant_id}")
+def admin_delete_tenant(tenant_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    cur.execute("DELETE FROM tenants WHERE tenant_id=?", (tenant_id,))
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return {"ok": deleted > 0, "tenant_id": tenant_id}
 
-@router.post("/provision/validate")
-def admin_provision_validate(payload: dict):
-    campaigns = payload.get("campaigns", [])
-    errors = []
+
+# ─── Sync — ViciDial campaigns not yet in BRICK ───────────────────────────────
+
+@router.get("/vici/campaigns/unassigned")
+def admin_vici_unassigned():
+    # Campaigns already registered in SQLite
+    sc = sqlite3.connect(DB_PATH)
+    sc_cur = sc.cursor()
+    _init_tenants(sc_cur)
+    sc.commit()
+    sc_cur.execute("SELECT campaign_id FROM tenants WHERE campaign_id IS NOT NULL")
+    assigned = {row[0] for row in sc_cur.fetchall()}
+    sc.close()
 
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
-
-        for camp in campaigns:
-            cid        = str(camp.get("campaign_id", "")).strip().upper()
-            clone_from = str(camp.get("clone_from",  "")).strip()
-            tenant_id  = str(camp.get("tenant_id",   "")).strip().lower()
-
-            if not cid:
-                errors.append("Campaign ID vacío"); continue
-
-            # Campaign must not already exist
-            cur.execute("SELECT campaign_id FROM vicidial_campaigns WHERE campaign_id=%s", (cid,))
-            if cur.fetchone():
-                errors.append(f"Campaña '{cid}' ya existe en ViciDial")
-
-            # Clone source must exist
-            if clone_from:
-                cur.execute("SELECT campaign_id FROM vicidial_campaigns WHERE campaign_id=%s", (clone_from,))
-                if not cur.fetchone():
-                    errors.append(f"Campaña fuente '{clone_from}' no existe")
-
-            # Tenant must not already exist in SQLite
-            sc = sqlite3.connect(DB_PATH)
-            sc_cur = sc.cursor()
-            sc_cur.execute("SELECT tenant_id FROM tenants WHERE tenant_id=?", (tenant_id,))
-            if sc_cur.fetchone():
-                errors.append(f"Tenant ID '{tenant_id}' ya existe en BRICK")
-            sc.close()
-
-            # List IDs must not already exist
-            for lst in camp.get("lists", []):
-                lid = lst.get("list_id")
-                if lid:
-                    cur.execute("SELECT list_id FROM vicidial_lists WHERE list_id=%s", (int(lid),))
-                    if cur.fetchone():
-                        errors.append(f"List ID {lid} ya existe en ViciDial")
-
+        cur.execute(
+            "SELECT campaign_id, campaign_name, active FROM vicidial_campaigns ORDER BY campaign_name"
+        )
+        all_campaigns = cur.fetchall()
         cur.close()
         conn.close()
-
     except Exception as e:
-        errors.append(f"Error de conexión: {str(e)}")
+        return {"error": str(e), "campaigns": []}
 
-    return {"valid": len(errors) == 0, "errors": errors}
+    unassigned = [
+        {
+            "campaign_id":   c["campaign_id"],
+            "campaign_name": c["campaign_name"],
+            "active":        c["active"] == "Y",
+        }
+        for c in all_campaigns
+        if c["campaign_id"] not in assigned
+    ]
+    return {"campaigns": unassigned}
 
 
-# ─── Provision — execute ──────────────────────────────────────────────────────
+# ─── Sync — register tenant in BRICK ─────────────────────────────────────────
 
-@router.post("/provision")
-def admin_provision(payload: dict, authorization: Optional[str] = Header(None)):
-    client_name    = str(payload.get("client_name",     "")).strip()
+@router.post("/tenants/sync")
+def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)):
+    """
+    Register an existing ViciDial tenant in BRICK.
+    ViciDial campaigns/lists/DIDs are already set up manually.
+    This endpoint:
+      1. Creates auth tenant + admin user in 8001 (PostgreSQL)
+      2. Creates SQLite tenant rows (one per campaign)
+    """
+    tenant_name    = str(payload.get("tenant_name",     "")).strip()
     subdomain      = str(payload.get("subdomain",       "")).strip().lower()
     admin_email    = str(payload.get("admin_email",     "")).strip()
     admin_password = str(payload.get("admin_password",  "")).strip()
     admin_first    = str(payload.get("admin_first_name","")).strip()
     admin_last     = str(payload.get("admin_last_name", "")).strip()
-    campaigns      = payload.get("campaigns", [])
+    campaigns      = payload.get("campaigns", [])  # [{campaign_id, tenant_id}]
 
-    if not client_name or not subdomain or not admin_email or not admin_password or not campaigns:
-        return {"ok": False, "errors": ["Faltan campos requeridos"], "results": []}
+    if not all([tenant_name, subdomain, admin_email, admin_password, admin_first, admin_last]):
+        return {"ok": False, "error": "Faltan campos requeridos"}
+    if not campaigns:
+        return {"ok": False, "error": "Selecciona al menos una campaña"}
 
-    # ── Step 0: Create tenant + admin user in Auth backend (8001) ─────────────
+    # ── Step 1: Create auth tenant + admin user ────────────────────────────────
     try:
         auth_resp = http.post(
             f"{AUTH_BASE_URL}/api/tenants",
             json={
-                "name":             client_name,
+                "name":             tenant_name,
                 "subdomain":        subdomain,
                 "industry":         "rei",
                 "primary_color":    "#2563EB",
@@ -157,91 +170,65 @@ def admin_provision(payload: dict, authorization: Optional[str] = Header(None)):
             timeout=15,
         )
         if auth_resp.status_code not in (200, 201):
-            return {"ok": False, "errors": [f"Auth backend error: {auth_resp.text}"], "results": []}
+            return {"ok": False, "error": f"Auth error: {auth_resp.text}"}
     except Exception as e:
-        return {"ok": False, "errors": [f"No se pudo conectar al auth backend: {str(e)}"], "results": []}
+        return {"ok": False, "error": f"No se pudo conectar al auth backend: {str(e)}"}
 
-    results = []
-    errors  = []
-
-    try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-
-        for camp in campaigns:
-            cid        = str(camp.get("campaign_id",   "")).strip().upper()
-            cname      = str(camp.get("campaign_name", "")).strip()[:40]
-            clone_from = str(camp.get("clone_from",    "IBFEO")).strip()
-            tenant_id  = str(camp.get("tenant_id",     "")).strip().lower()
-            lists      = camp.get("lists", [])
-
-            if not cid or not cname or not tenant_id:
-                errors.append(f"Datos incompletos para campaña '{cid}'"); continue
-
-            # ── Clone campaign ────────────────────────────────────────────────
-            cur.execute("SELECT * FROM vicidial_campaigns WHERE campaign_id=%s", (clone_from,))
-            source = cur.fetchone()
-            if not source:
-                errors.append(f"Campaña fuente '{clone_from}' no encontrada"); continue
-
-            # Override campaign-specific fields
-            source["campaign_id"]           = cid
-            source["campaign_name"]         = cname
-            source["active"]                = "Y"
-            source["campaign_changedate"]   = dt.datetime.now()
-            source["campaign_logindate"]    = None
-            source["campaign_calldate"]     = None
-            source["campaign_stats_refresh"]= "N"
-
-            cols        = list(source.keys())
-            cols_str    = ", ".join([f"`{c}`" for c in cols])
-            placeholders= ", ".join(["%s"] * len(cols))
-            values      = [_clean(source[c]) for c in cols]
-
-            insert_cur = conn.cursor()
-            insert_cur.execute(
-                f"INSERT INTO vicidial_campaigns ({cols_str}) VALUES ({placeholders})", values
-            )
-
-            # ── Create lists ──────────────────────────────────────────────────
-            lists_created = []
-            for lst in lists:
-                lid   = lst.get("list_id", "")
-                lname = str(lst.get("list_name", "")).strip()
-                if not lid or not lname:
-                    continue
-                insert_cur.execute("""
-                    INSERT INTO vicidial_lists
-                        (list_id, list_name, campaign_id, active, list_changedate)
-                    VALUES (%s, %s, %s, 'Y', NOW())
-                """, (int(lid), lname, cid))
-                lists_created.append({"list_id": int(lid), "list_name": lname})
-
-            conn.commit()
-            insert_cur.close()
-
-            # ── Save tenant to SQLite ─────────────────────────────────────────
-            sc = sqlite3.connect(DB_PATH)
-            sc_cur = sc.cursor()
-            _init_tenants(sc_cur)
+    # ── Step 2: Save each campaign row to SQLite ───────────────────────────────
+    sc = sqlite3.connect(DB_PATH)
+    sc_cur = sc.cursor()
+    _init_tenants(sc_cur)
+    synced = []
+    for camp in campaigns:
+        cid = str(camp.get("campaign_id", "")).strip().upper()
+        tid = str(camp.get("tenant_id",   "")).strip().lower()
+        if cid and tid:
             sc_cur.execute(
                 "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id, role, active) VALUES (?,?,?,'client',1)",
-                (tenant_id, cname, cid)
+                (tid, tenant_name, cid),
             )
-            sc.commit()
-            sc.close()
+            synced.append({"campaign_id": cid, "tenant_id": tid})
+    sc.commit()
+    sc.close()
 
-            results.append({
-                "campaign_id":   cid,
-                "campaign_name": cname,
-                "tenant_id":     tenant_id,
-                "lists":         lists_created,
-            })
+    return {
+        "ok":              True,
+        "tenant_name":     tenant_name,
+        "subdomain":       subdomain,
+        "campaigns_synced": synced,
+    }
 
-        cur.close()
-        conn.close()
 
-    except Exception as e:
-        errors.append(f"DB Error: {str(e)}")
+# ─── Scripts ──────────────────────────────────────────────────────────────────
 
-    return {"ok": len(errors) == 0 and len(results) > 0, "results": results, "errors": errors}
+@router.get("/scripts/{campaign_id}")
+def admin_get_script(campaign_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    _init_scripts(cur)
+    conn.commit()
+    cur.execute(
+        "SELECT script, updated_at FROM campaign_scripts WHERE campaign_id=?",
+        (campaign_id.upper(),),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row:
+        return {"campaign_id": campaign_id.upper(), "script": row[0], "updated_at": row[1]}
+    return {"campaign_id": campaign_id.upper(), "script": "", "updated_at": None}
+
+
+@router.put("/scripts/{campaign_id}")
+def admin_save_script(campaign_id: str, payload: dict):
+    script = str(payload.get("script", ""))
+    now    = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    _init_scripts(cur)
+    cur.execute(
+        "INSERT OR REPLACE INTO campaign_scripts (campaign_id, script, updated_at) VALUES (?,?,?)",
+        (campaign_id.upper(), script, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "campaign_id": campaign_id.upper(), "updated_at": now}
