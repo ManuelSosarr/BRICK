@@ -179,6 +179,56 @@ def burner_toggle(payload: dict):
         return {"ok": False, "response": f"DB ERROR: {str(e)}"}
 
 
+@router.post("/push/preview")
+def burner_push_preview(payload: dict):
+    campaign_id = payload.get("campaign_id")
+    if not campaign_id:
+        return {"error": "campaign_id required"}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("SELECT list_id FROM vicidial_lists WHERE campaign_id=%s LIMIT 1", (campaign_id,))
+        dest_list = cur.fetchone()
+        if not dest_list:
+            conn.close()
+            return {"error": "Campaign not found"}
+
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id='IBFEO')
+            AND status = 'AL'
+        """)
+        al_count = cur.fetchone()["cnt"]
+
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id='IBFEO')
+            AND status IN ('NA','AB') AND called_count < 5
+        """)
+        possible_count = cur.fetchone()["cnt"]
+
+        cur.execute("""
+            SELECT COUNT(*) as cnt FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id='IBFEO')
+            AND status IN ('DROP','PDROP','AA','DNCL','DNC')
+        """)
+        excluded_count = cur.fetchone()["cnt"]
+
+        cur.close()
+        conn.close()
+        return {
+            "would_push": {
+                "AL": al_count,
+                "possible_working": possible_count,
+            },
+            "total": al_count + possible_count,
+            "excluded": excluded_count,
+            "destination_campaign": campaign_id,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.post("/push")
 def burner_push(payload: dict):
     campaign_id = payload.get("campaign_id")

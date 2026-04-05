@@ -186,5 +186,16 @@ def burner_minutes():
 | F11 | Costo real del Burner = minutos AL | NA/PDROP/AA/AB = 0 minutos facturados. Solo AL cuenta |
 | F12 | Túnel SSH: dos terminales siempre | Terminal 1: túnel bloqueado. Terminal 2: SSH para comandos |
 
+## ESTÁNDAR V19 — OPERACIONES DESTRUCTIVAS
+Toda operación que modifique datos en masa (UPDATE/DELETE sobre leads, listas, campañas) DEBE tener un endpoint de preview antes del ejecutor real.
+
+Patrón obligatorio:
+- `POST /api/.../preview` → SELECT COUNT(*) con el mismo WHERE del UPDATE/DELETE real → devuelve cuántos registros se afectarían y desglose
+- `POST /api/...` → el UPDATE/DELETE real, solo se llama si el usuario confirmó el preview en la UI
+
+Ejemplo implementado: `/api/burner/push/preview` + `/api/burner/push`
+
+Esto aplica a: Push to Campaign, hopper reset manual, cualquier limpieza masiva de listas.
+
 ## REFERENCIA COMPLETA
 BRICK_Handover_V18.1.2 — arquitectura completa, credenciales, lecciones aprendidas
