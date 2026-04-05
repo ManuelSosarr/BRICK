@@ -131,7 +131,7 @@ def burner_status():
             "answering_machines_today": stats["answering_machines_today"] if stats else 0,
             "dialable_leads":          stats["dialable_leads"] if stats else 0,
             "live_agent_status":       live["status"] if live else "N/A",
-            "last_update":             str(live["last_update_time"]) if live else str(datetime.now()),
+            "last_update":             str(live["last_update_time"])[:19] if live else datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         }
     except Exception as e:
         return {"error": str(e)}
@@ -209,6 +209,53 @@ def burner_push(payload: dict):
         return {"error": str(e)}
 
 
+@router.get("/minutes")
+def burner_minutes():
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        cur.execute("""
+            SELECT status,
+                   COUNT(*) as calls,
+                   SUM(length_in_sec) as raw_seconds,
+                   SUM(CEIL(length_in_sec / 60)) as billed_minutes
+            FROM vicidial_log
+            WHERE campaign_id = 'IBFEO'
+            AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            GROUP BY status
+            ORDER BY calls DESC
+        """)
+        breakdown = cur.fetchall()
+        cur.execute("""
+            SELECT COUNT(*) as total_calls,
+                   SUM(length_in_sec) as total_raw_seconds,
+                   SUM(CEIL(length_in_sec / 60)) as total_billed_minutes
+            FROM vicidial_log
+            WHERE campaign_id = 'IBFEO'
+            AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        """)
+        totals = cur.fetchone()
+        cur.close()
+        conn.close()
+        return {
+            "total_calls": totals["total_calls"] or 0,
+            "total_raw_seconds": int(totals["total_raw_seconds"] or 0),
+            "total_billed_minutes": int(totals["total_billed_minutes"] or 0),
+            "estimated_cost_usd": round(float(totals["total_billed_minutes"] or 0) * 0.01, 2),
+            "breakdown": [
+                {
+                    "status": row["status"],
+                    "calls": row["calls"],
+                    "raw_seconds": int(row["raw_seconds"] or 0),
+                    "billed_minutes": int(row["billed_minutes"] or 0),
+                }
+                for row in breakdown
+            ]
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
 @router.get("/export")
 def burner_export():
     try:
@@ -236,7 +283,7 @@ def burner_export():
         writer.writerow([])
         writer.writerow(["=== POSSIBLE WORKING (NA/AB < 5 attempts) ==="])
         writer.writerow(headers)
-        for l in [x for x in leads if x["status"] in ("NA","AB") and l["called_count"] < 5]:
+        for l in [x for x in leads if x["status"] in ("NA","AB") and x["called_count"] < 5]:
             writer.writerow([l["first_name"],l["last_name"],l["phone_number"],l["address1"],l["city"],l["state"],l["postal_code"],l["status"],l["called_count"],l["last_local_call_time"]])
 
         writer.writerow([])
