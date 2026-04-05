@@ -19,29 +19,58 @@ router = APIRouter()
 DB_PATH = "C:/Users/sosai/BRICK/vicidial.db"
 
 
-# ─── Burner tenants (tenant → campaign mapping) ───────────────────────────────
+# ─── Tenants table (tenant → campaign mapping) ────────────────────────────────
 
-def _init_burner_tenants(cur):
+def _init_tenants(cur):
+    """Create tenants table and auto-migrate data from burner_tenants if it exists."""
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS burner_tenants (
+        CREATE TABLE IF NOT EXISTS tenants (
             tenant_id   TEXT PRIMARY KEY,
             tenant_name TEXT NOT NULL,
-            campaign_id TEXT NOT NULL,
+            campaign_id TEXT,
+            role        TEXT DEFAULT 'client',
             active      INTEGER DEFAULT 1
         )
     """)
-    cur.execute("INSERT OR IGNORE INTO burner_tenants VALUES ('bossbuy','BossBuy','IBFEO',1)")
+    # Migrate from legacy burner_tenants if it exists
+    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='burner_tenants'")
+    if cur.fetchone():
+        cur.execute("SELECT tenant_id, tenant_name, campaign_id, active FROM burner_tenants")
+        for r in cur.fetchall():
+            cur.execute(
+                "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id, active) VALUES (?,?,?,?)", r
+            )
+    # Seed BossBuy default
+    cur.execute(
+        "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id) VALUES ('bossbuy','BossBuy','IBFEO')"
+    )
+
+
+def get_campaign_for_tenant(tenant_id: str) -> str | None:
+    """Resolve tenant_id → campaign_id from SQLite tenants table."""
+    conn = sqlite3.connect(DB_PATH)
+    cur = conn.cursor()
+    _init_tenants(cur)
+    conn.commit()
+    cur.execute("SELECT campaign_id FROM tenants WHERE tenant_id=? AND active=1", (tenant_id,))
+    row = cur.fetchone()
+    conn.close()
+    return row[0] if (row and row[0]) else None
+
 
 @router.get("/tenants")
 def burner_tenants():
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    _init_burner_tenants(cur)
+    _init_tenants(cur)
     conn.commit()
-    cur.execute("SELECT tenant_id, tenant_name, campaign_id FROM burner_tenants WHERE active=1 ORDER BY tenant_name")
+    cur.execute(
+        "SELECT tenant_id, tenant_name, campaign_id FROM tenants WHERE active=1 AND campaign_id IS NOT NULL ORDER BY tenant_name"
+    )
     rows = [{"tenant_id": r[0], "tenant_name": r[1], "campaign_id": r[2]} for r in cur.fetchall()]
     conn.close()
     return rows
+
 
 @router.post("/tenants")
 def upsert_burner_tenant(payload: dict):
@@ -52,8 +81,11 @@ def upsert_burner_tenant(payload: dict):
         return {"ok": False, "error": "tenant_id, tenant_name and campaign_id required"}
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
-    _init_burner_tenants(cur)
-    cur.execute("INSERT OR REPLACE INTO burner_tenants VALUES (?,?,?,1)", (tenant_id, tenant_name, campaign_id))
+    _init_tenants(cur)
+    cur.execute(
+        "INSERT OR REPLACE INTO tenants (tenant_id, tenant_name, campaign_id, active) VALUES (?,?,?,1)",
+        (tenant_id, tenant_name, campaign_id)
+    )
     conn.commit()
     conn.close()
     return {"ok": True}
@@ -172,7 +204,10 @@ threading.Thread(target=schedule_watchdog, daemon=True).start()
 # ─── Endpoints ────────────────────────────────────────────────────────────────
 
 @router.get("/status")
-def burner_status(campaign_id: str = Query(...)):
+def burner_status(tenant_id: str = Query(...)):
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -184,6 +219,7 @@ def burner_status(campaign_id: str = Query(...)):
         live = cur.fetchone()
         conn.close()
         return {
+            "tenant_id":                tenant_id,
             "campaign_id":              campaign_id,
             "remote_agent_status":      agent["status"] if agent else "UNKNOWN",
             "calls_onemin":             stats["calls_onemin"] if stats else 0,
@@ -197,7 +233,10 @@ def burner_status(campaign_id: str = Query(...)):
 
 
 @router.get("/weekly")
-def burner_weekly(campaign_id: str = Query(...)):
+def burner_weekly(tenant_id: str = Query(...)):
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -218,7 +257,10 @@ def burner_weekly(campaign_id: str = Query(...)):
 
 
 @router.get("/minutes")
-def burner_minutes(campaign_id: str = Query(...)):
+def burner_minutes(tenant_id: str = Query(...)):
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -243,6 +285,7 @@ def burner_minutes(campaign_id: str = Query(...)):
         conn.close()
         total_billed = int(totals["total_billed_minutes"] or 0)
         return {
+            "tenant_id": tenant_id,
             "campaign_id": campaign_id,
             "total_calls_all_statuses": totals["total_calls"] or 0,
             "total_raw_seconds_all_statuses": int(totals["total_raw_seconds"] or 0),
@@ -262,10 +305,13 @@ def burner_minutes(campaign_id: str = Query(...)):
 
 @router.post("/toggle")
 def burner_toggle(payload: dict):
-    campaign_id = str(payload.get("campaign_id", "")).strip()
-    action = str(payload.get("action", "")).upper()
+    tenant_id   = str(payload.get("tenant_id", "")).strip()
+    action      = str(payload.get("action", "")).upper()
+    if not tenant_id:
+        return {"ok": False, "response": "tenant_id required"}
+    campaign_id = get_campaign_for_tenant(tenant_id)
     if not campaign_id:
-        return {"ok": False, "response": "campaign_id required"}
+        return {"ok": False, "response": f"No campaign assigned to tenant '{tenant_id}'"}
     if action not in ("START", "STOP"):
         return {"ok": False, "response": "Invalid action. Use START or STOP."}
     new_status = "ACTIVE" if action == "START" else "INACTIVE"
@@ -286,10 +332,13 @@ def burner_toggle(payload: dict):
 
 @router.post("/push/preview")
 def burner_push_preview(payload: dict):
-    source = str(payload.get("source_campaign_id", "")).strip()
-    destination = str(payload.get("destination_campaign_id", "")).strip()
-    if not source or not destination:
-        return {"error": "source_campaign_id and destination_campaign_id required"}
+    source_tenant_id  = str(payload.get("source_tenant_id", "")).strip()
+    destination       = str(payload.get("destination_campaign_id", "")).strip()
+    if not source_tenant_id or not destination:
+        return {"error": "source_tenant_id and destination_campaign_id required"}
+    source = get_campaign_for_tenant(source_tenant_id)
+    if not source:
+        return {"error": f"No campaign assigned to tenant '{source_tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -305,17 +354,27 @@ def burner_push_preview(payload: dict):
         excluded = cur.fetchone()["cnt"]
         cur.close()
         conn.close()
-        return {"would_push": {"AL": al, "possible_working": possible}, "total": al + possible, "excluded": excluded, "source_campaign": source, "destination_campaign": destination}
+        return {
+            "would_push": {"AL": al, "possible_working": possible},
+            "total": al + possible,
+            "excluded": excluded,
+            "source_tenant": source_tenant_id,
+            "source_campaign": source,
+            "destination_campaign": destination
+        }
     except Exception as e:
         return {"error": str(e)}
 
 
 @router.post("/push")
 def burner_push(payload: dict):
-    source = str(payload.get("source_campaign_id", "")).strip()
-    destination = str(payload.get("destination_campaign_id", "")).strip()
-    if not source or not destination:
-        return {"error": "source_campaign_id and destination_campaign_id required"}
+    source_tenant_id  = str(payload.get("source_tenant_id", "")).strip()
+    destination       = str(payload.get("destination_campaign_id", "")).strip()
+    if not source_tenant_id or not destination:
+        return {"error": "source_tenant_id and destination_campaign_id required"}
+    source = get_campaign_for_tenant(source_tenant_id)
+    if not source:
+        return {"error": f"No campaign assigned to tenant '{source_tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -342,7 +401,10 @@ def burner_push(payload: dict):
 
 
 @router.get("/export")
-def burner_export(campaign_id: str = Query(...)):
+def burner_export(tenant_id: str = Query(...)):
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
@@ -362,20 +424,20 @@ def burner_export(campaign_id: str = Query(...)):
 
         writer.writerow([f"=== ANSWERED (AL) — {campaign_id} ==="])
         writer.writerow(headers)
-        for l in [x for x in leads if x["status"] == "AL"]:
-            writer.writerow([l["first_name"], l["last_name"], l["phone_number"], l["address1"], l["city"], l["state"], l["postal_code"], l["status"], l["called_count"], l["last_local_call_time"]])
+        for x in [x for x in leads if x["status"] == "AL"]:
+            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
 
         writer.writerow([])
         writer.writerow([f"=== POSSIBLE WORKING (NA/AB < 5 attempts) — {campaign_id} ==="])
         writer.writerow(headers)
-        for l in [x for x in leads if x["status"] in ("NA", "AB") and x["called_count"] < 5]:
-            writer.writerow([l["first_name"], l["last_name"], l["phone_number"], l["address1"], l["city"], l["state"], l["postal_code"], l["status"], l["called_count"], l["last_local_call_time"]])
+        for x in [x for x in leads if x["status"] in ("NA", "AB") and x["called_count"] < 5]:
+            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
 
         writer.writerow([])
         writer.writerow([f"=== EXCLUDED (DROP/PDROP/AA/DNCL/DNC) — {campaign_id} ==="])
         writer.writerow(headers)
-        for l in [x for x in leads if x["status"] in ("DROP", "PDROP", "AA", "DNCL", "DNC")]:
-            writer.writerow([l["first_name"], l["last_name"], l["phone_number"], l["address1"], l["city"], l["state"], l["postal_code"], l["status"], l["called_count"], l["last_local_call_time"]])
+        for x in [x for x in leads if x["status"] in ("DROP", "PDROP", "AA", "DNCL", "DNC")]:
+            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
 
         output.seek(0)
         return StreamingResponse(

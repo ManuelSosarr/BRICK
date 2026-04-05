@@ -31,25 +31,34 @@
 ## MULTI-TENANT — DATA BURNER
 El superadmin (BRICK) ve todos los clientes. Cada cliente tiene su campaña burner asignada.
 El dropdown muestra **nombre del tenant**, no la campaña — la campaña es un detalle interno.
+El dropdown **solo es visible para superadmin (isMaster)**. Los clientes se auto-seleccionan por su subdomain del JWT.
 
-### Tabla `burner_tenants` en SQLite (vicidial.db)
+### Tabla `tenants` en SQLite (vicidial.db)
 ```sql
-CREATE TABLE IF NOT EXISTS burner_tenants (
+CREATE TABLE IF NOT EXISTS tenants (
     tenant_id   TEXT PRIMARY KEY,
     tenant_name TEXT NOT NULL,
-    campaign_id TEXT NOT NULL,  -- campaña burner asignada al cliente
+    campaign_id TEXT,           -- campaña burner asignada (NULL = sin burner)
+    role        TEXT DEFAULT 'client',
     active      INTEGER DEFAULT 1
 );
 -- Dato inicial:
-INSERT OR IGNORE INTO burner_tenants VALUES ('bossbuy','BossBuy','IBFEO',1);
+INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id) VALUES ('bossbuy','BossBuy','IBFEO');
 ```
-
+Auto-migra datos de `burner_tenants` si existe (backward compat).
 Para agregar un nuevo cliente: `POST /api/burner/tenants` con `{tenant_id, tenant_name, campaign_id}`
 
-### isMaster en frontend
+### Resolución tenant → campaign (backend)
+Todos los endpoints usan `tenant_id` (no `campaign_id`). El helper `get_campaign_for_tenant(tenant_id)` hace el lookup en SQLite.
+
+### isMaster + auto-select en frontend
 ```ts
-const payload = JSON.parse(atob(localStorage.getItem('access_token').split('.')[1]))
-const isMaster = payload?.role === 'superadmin' || payload?.subdomain === 'brick'
+const _payload = getTokenPayload()
+const isMaster = _payload?.role === 'superadmin' || _payload?.subdomain === 'brick'
+const clientSubdomain = _payload?.subdomain ?? ''
+
+// isMaster: dropdown visible, selecciona manualmente
+// non-master: no dropdown, auto-select por subdomain
 ```
 
 ## ESTADO ACTUAL — LO QUE FUNCIONA ✅
@@ -136,6 +145,8 @@ Ejemplo: `/api/burner/push/preview` + `/api/burner/push`
 | F12 | Túnel SSH: dos terminales siempre | Terminal 1: túnel bloqueado. Terminal 2: SSH para comandos |
 | F13 | Dropdown vacío ≠ bug de código | Primero verificar git pull en ASUS antes de depurar |
 | F14 | Data Burner dropdown = tenants, no campañas | La campaña es un detalle interno, el usuario ve el nombre del cliente |
+| F15 | Tabla burner → `tenants` con auto-migración | Usa `tenants` en SQLite. Migra `burner_tenants` automáticamente. Param API = `tenant_id`, no `campaign_id` |
+| F16 | Non-master no ve dropdown | Se auto-seleccionan por `subdomain` del JWT. Dropdown solo para superadmin |
 
 ## REFERENCIA COMPLETA
 BRICK_Handover_V18.1.2 + sesión 5 Abril 2026
