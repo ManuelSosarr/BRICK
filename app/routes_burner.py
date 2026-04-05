@@ -237,12 +237,14 @@ def burner_minutes():
         totals = cur.fetchone()
         cur.close()
         conn.close()
+        total_billed = int(totals["total_billed_minutes"] or 0)
         return {
-            "total_calls": totals["total_calls"] or 0,
-            "total_raw_seconds": int(totals["total_raw_seconds"] or 0),
-            "total_billed_minutes": int(totals["total_billed_minutes"] or 0),
-            "estimated_cost_usd": round(float(totals["total_billed_minutes"] or 0) * 0.01, 2),
-            "breakdown": [
+            "total_calls_all_statuses": totals["total_calls"] or 0,
+            "total_raw_seconds_all_statuses": int(totals["total_raw_seconds"] or 0),
+            "total_billed_minutes_all_statuses": total_billed,
+            "note": "Billed minutes include ALL statuses (AL, DROP, AMD, PS, DNC, etc.) — not just AL",
+            "estimated_cost_usd": round(total_billed * 0.01, 2),
+            "breakdown_by_status": [
                 {
                     "status": row["status"],
                     "calls": row["calls"],
