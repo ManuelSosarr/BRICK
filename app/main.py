@@ -7,6 +7,7 @@ from app.routes_export import router as export_router
 from app.routes_vici import router as vici_router
 from app.routes_skiptrace import router as skiptrace_router
 from app.routes_agent import router as agent_router
+from app.routes_burner import router as burner_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -30,3 +31,4 @@ app.include_router(export_router,    prefix="/api/export",    tags=["export"])
 app.include_router(vici_router,      prefix="/api/vici",      tags=["vici"])
 app.include_router(skiptrace_router, prefix="/api/skiptrace", tags=["skiptrace"])
 app.include_router(agent_router,     prefix="/api/agent",     tags=["agent"])
+app.include_router(burner_router,    prefix="/api/burner",    tags=["burner"])
