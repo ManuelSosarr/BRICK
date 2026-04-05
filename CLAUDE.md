@@ -38,11 +38,8 @@
 - Data Burner: Remote Agent IBFEO activo, Start/Stop desde UI funcionando
 
 ## PENDIENTE CRÍTICO
-1. Fix Sync/Dashboard/Backup — columna synced_to_vici no existe en DB que usa uvicorn
-   - Migrar: ALTER TABLE skiptrace_records ADD COLUMN synced_to_vici BOOLEAN DEFAULT 0
-   - Fix permanente: cambiar database.py a ruta absoluta C:/Users/sosai/BRICK/vicidial.db
-2. Push to CRM vía Chrome Extension — reescrito, no probado en llamada real
-3. County Link — endpoint existe, verificar con datos reales en PropertyMaster
+1. Push to CRM vía Chrome Extension — reescrito, no probado en llamada real
+2. County Link — endpoint existe, verificar con datos reales en PropertyMaster
 
 ## DATA BURNER — IBFEO
 - Remote Agent: user_start=9999, campaign_id=IBFEO
@@ -83,10 +80,6 @@
 ### Backend no arranca
 1. Correr manual: `cd C:\Users\sosai\BRICK && uvicorn app.main:app --port 8000`
 2. Ver error exacto en la terminal
-
-### Sync/Dashboard/Backup falla
-- Causa: columna synced_to_vici no existe en vicidial.db que usa uvicorn
-- Ver sección PENDIENTE CRÍTICO punto 1
 
 ## REFERENCIA COMPLETA
 BRICK_Handover_Enhanced_V17.docx — arquitectura completa, credenciales, lecciones aprendidas
