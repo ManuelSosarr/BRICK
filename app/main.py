@@ -8,6 +8,7 @@ from app.routes_vici import router as vici_router
 from app.routes_skiptrace import router as skiptrace_router
 from app.routes_agent import router as agent_router
 from app.routes_burner import router as burner_router
+from app.routes_admin import router as admin_router
 
 Base.metadata.create_all(bind=engine)
 
@@ -32,3 +33,4 @@ app.include_router(vici_router,      prefix="/api/vici",      tags=["vici"])
 app.include_router(skiptrace_router, prefix="/api/skiptrace", tags=["skiptrace"])
 app.include_router(agent_router,     prefix="/api/agent",     tags=["agent"])
 app.include_router(burner_router,    prefix="/api/burner",    tags=["burner"])
+app.include_router(admin_router,     prefix="/api/admin",     tags=["admin"])

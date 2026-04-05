@@ -86,6 +86,32 @@ const clientSubdomain = _payload?.subdomain ?? ''
 ## PENDIENTE
 - Push to CRM vía Chrome Extension — reescrito, no probado en llamada real
 - County Link — endpoint existe, verificar con datos reales en PropertyMaster
+- DB PostgreSQL (ASUS): correr SQL de limpieza DialFlow → BRICK (ver abajo)
+
+## SQL DE LIMPIEZA — correr en ASUS una sola vez
+```sql
+-- PostgreSQL (puerto 8001 / BRICK-auth)
+DELETE FROM tenants WHERE subdomain = 'acme';
+UPDATE tenants SET name = 'BRICK', subdomain = 'brick' WHERE subdomain = 'system';
+UPDATE users SET email = 'super@brick.com' WHERE email = 'super@dialflow.com';
+
+-- Verificar:
+SELECT id, name, subdomain FROM tenants;
+SELECT email, role FROM users;
+```
+```powershell
+# SQLite (puerto 8000)
+python -c "
+import sqlite3
+conn = sqlite3.connect('C:/Users/sosai/BRICK/vicidial.db')
+c = conn.cursor()
+c.execute(\"DELETE FROM tenants WHERE tenant_id='acme'\")
+c.execute(\"UPDATE tenants SET tenant_name='BRICK' WHERE tenant_id='brick'\")
+conn.commit()
+print(c.execute('SELECT * FROM tenants').fetchall())
+conn.close()
+"
+```
 
 ## DATA BURNER — LÓGICA
 - Remote Agent: user_start=9999, campaign_id = el del tenant seleccionado
