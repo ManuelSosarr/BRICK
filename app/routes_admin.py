@@ -1,40 +1,95 @@
 import sqlite3
 import datetime as dt
+import json
 import requests as http
+import psycopg2
 from fastapi import APIRouter, Header
 from typing import Optional
+
 from app.vici_connector import get_connection
 
 router = APIRouter()
 
+# SQLite — solo para campaign_scripts y Burner config keys
 DB_PATH       = "C:/Users/sosai/BRICK/vicidial.db"
+
+# PostgreSQL — fuente de verdad para tenants
+PG_DSN        = "postgresql://dialflow:dialflow@localhost:5432/dialflow"
 AUTH_BASE_URL = "http://localhost:8001"
 
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
+# ─── PostgreSQL helper ────────────────────────────────────────────────────────
 
-def _init_tenants(cur):
+def _pg():
+    """Short-lived psycopg2 connection. Caller must close."""
+    return psycopg2.connect(PG_DSN)
+
+
+def _pg_list_tenants() -> list[dict]:
+    """
+    Read tenants from PostgreSQL, expanding campaign_ids JSON into one row
+    per campaign (matches the previous SQLite row-per-campaign contract).
+    """
+    conn = _pg()
+    cur  = conn.cursor()
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS tenants (
-            tenant_id   TEXT PRIMARY KEY,
-            tenant_name TEXT NOT NULL,
-            campaign_id TEXT,
-            role        TEXT DEFAULT 'client',
-            active      INTEGER DEFAULT 1
-        )
+        SELECT t.subdomain,
+               t.name,
+               t.status,
+               v.campaign_ids
+        FROM   tenants t
+        LEFT JOIN vicidial_configs v ON v.tenant_id = t.id
+        ORDER  BY t.name
     """)
-    # auto-migrate from burner_tenants if exists
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='burner_tenants'")
-    if cur.fetchone():
-        cur.execute("SELECT tenant_id, tenant_name, campaign_id, active FROM burner_tenants")
-        for r in cur.fetchall():
-            cur.execute(
-                "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id, active) VALUES (?,?,?,?)", r
-            )
-    cur.execute(
-        "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id) VALUES ('bossbuy','BossBuy','IBFEO')"
-    )
+    rows = cur.fetchall()
+    cur.close(); conn.close()
 
+    result = []
+    for subdomain, name, status, campaign_ids in rows:
+        active = status in ("trial", "active")
+        camps  = campaign_ids or []           # JSON list or None
+        if isinstance(camps, str):
+            try: camps = json.loads(camps)
+            except: camps = []
+        if camps:
+            for cid in camps:
+                result.append({
+                    "tenant_id":   subdomain,
+                    "tenant_name": name,
+                    "role":        "client",
+                    "campaign_id": cid,
+                    "active":      active,
+                })
+        else:
+            result.append({
+                "tenant_id":   subdomain,
+                "tenant_name": name,
+                "role":        "client",
+                "campaign_id": None,
+                "active":      active,
+            })
+    return result
+
+
+def _pg_assigned_campaigns() -> set:
+    """Return the set of campaign IDs already assigned to any tenant."""
+    conn = _pg()
+    cur  = conn.cursor()
+    cur.execute("SELECT campaign_ids FROM vicidial_configs")
+    rows = cur.fetchall()
+    cur.close(); conn.close()
+    assigned = set()
+    for (campaign_ids,) in rows:
+        camps = campaign_ids or []
+        if isinstance(camps, str):
+            try: camps = json.loads(camps)
+            except: camps = []
+        for cid in camps:
+            assigned.add(str(cid))
+    return assigned
+
+
+# ─── SQLite helper — solo para scripts ────────────────────────────────────────
 
 def _init_scripts(cur):
     cur.execute("""
@@ -46,72 +101,74 @@ def _init_scripts(cur):
     """)
 
 
-# ─── Tenants CRUD ─────────────────────────────────────────────────────────────
+# ─── Tenants CRUD — ahora desde PostgreSQL ───────────────────────────────────
 
 @router.get("/tenants")
 def admin_list_tenants():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    _init_tenants(cur)
-    conn.commit()
-    cur.execute("SELECT tenant_id, tenant_name, role, campaign_id, active FROM tenants ORDER BY role DESC, tenant_name")
-    rows = cur.fetchall()
-    conn.close()
-    return [
-        {"tenant_id": r[0], "tenant_name": r[1], "role": r[2], "campaign_id": r[3], "active": bool(r[4])}
-        for r in rows
-    ]
+    try:
+        return _pg_list_tenants()
+    except Exception as e:
+        return {"error": f"PostgreSQL no disponible: {str(e)}"}
 
 
 @router.post("/tenants/{tenant_id}/toggle")
 def admin_toggle_tenant(tenant_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("SELECT active FROM tenants WHERE tenant_id=?", (tenant_id,))
-    row = cur.fetchone()
-    if not row:
-        conn.close()
-        return {"ok": False, "error": f"Tenant '{tenant_id}' no encontrado"}
-    new_active = 0 if row[0] == 1 else 1
-    cur.execute("UPDATE tenants SET active=? WHERE tenant_id=?", (new_active, tenant_id))
-    conn.commit()
-    conn.close()
-    return {"ok": True, "tenant_id": tenant_id, "active": bool(new_active)}
+    """
+    Toggle tenant active/suspended en PostgreSQL.
+    tenant_id = subdomain (e.g. 'bossbuy').
+    """
+    try:
+        conn = _pg()
+        cur  = conn.cursor()
+        cur.execute("SELECT status FROM tenants WHERE subdomain=%s", (tenant_id,))
+        row = cur.fetchone()
+        if not row:
+            cur.close(); conn.close()
+            return {"ok": False, "error": f"Tenant '{tenant_id}' no encontrado"}
+        new_status = "suspended" if row[0] in ("trial", "active") else "active"
+        cur.execute("UPDATE tenants SET status=%s WHERE subdomain=%s", (new_status, tenant_id))
+        conn.commit()
+        cur.close(); conn.close()
+        return {"ok": True, "tenant_id": tenant_id, "active": new_status == "active"}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @router.delete("/tenants/{tenant_id}")
 def admin_delete_tenant(tenant_id: str):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("DELETE FROM tenants WHERE tenant_id=?", (tenant_id,))
-    conn.commit()
-    deleted = cur.rowcount
-    conn.close()
-    return {"ok": deleted > 0, "tenant_id": tenant_id}
+    """
+    Elimina tenant de PostgreSQL. Cascadea a users, configs, leads, etc.
+    tenant_id = subdomain.
+    """
+    try:
+        conn = _pg()
+        cur  = conn.cursor()
+        cur.execute("DELETE FROM tenants WHERE subdomain=%s", (tenant_id,))
+        conn.commit()
+        deleted = cur.rowcount
+        cur.close(); conn.close()
+        return {"ok": deleted > 0, "tenant_id": tenant_id}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
-# ─── Sync — ViciDial campaigns not yet in BRICK ───────────────────────────────
+# ─── ViciDial campaigns no asignados ─────────────────────────────────────────
 
 @router.get("/vici/campaigns/unassigned")
 def admin_vici_unassigned():
-    # Campaigns already registered in SQLite
-    sc = sqlite3.connect(DB_PATH)
-    sc_cur = sc.cursor()
-    _init_tenants(sc_cur)
-    sc.commit()
-    sc_cur.execute("SELECT campaign_id FROM tenants WHERE campaign_id IS NOT NULL")
-    assigned = {row[0] for row in sc_cur.fetchall()}
-    sc.close()
+    try:
+        assigned = _pg_assigned_campaigns()
+    except Exception as e:
+        return {"error": f"PostgreSQL no disponible: {str(e)}", "campaigns": []}
 
     try:
         conn = get_connection()
-        cur = conn.cursor(dictionary=True)
+        cur  = conn.cursor(dictionary=True)
         cur.execute(
             "SELECT campaign_id, campaign_name, active FROM vicidial_campaigns ORDER BY campaign_name"
         )
         all_campaigns = cur.fetchall()
-        cur.close()
-        conn.close()
+        cur.close(); conn.close()
     except Exception as e:
         return {"error": str(e), "campaigns": []}
 
@@ -127,16 +184,14 @@ def admin_vici_unassigned():
     return {"campaigns": unassigned}
 
 
-# ─── Sync — register tenant in BRICK ─────────────────────────────────────────
+# ─── Sync — registrar tenant nuevo en BRICK ──────────────────────────────────
 
 @router.post("/tenants/sync")
 def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)):
     """
-    Register an existing ViciDial tenant in BRICK.
-    ViciDial campaigns/lists/DIDs are already set up manually.
-    This endpoint:
-      1. Creates auth tenant + admin user in 8001 (PostgreSQL)
-      2. Creates SQLite tenant rows (one per campaign)
+    Registra un tenant de ViciDial en BRICK.
+    - Crea auth tenant + admin user en 8001 (PostgreSQL).
+    - Ya NO escribe en SQLite — PostgreSQL es la fuente de verdad.
     """
     tenant_name    = str(payload.get("tenant_name",     "")).strip()
     subdomain      = str(payload.get("subdomain",       "")).strip().lower()
@@ -151,7 +206,13 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
     if not campaigns:
         return {"ok": False, "error": "Selecciona al menos una campaña"}
 
-    # ── Step 1: Create auth tenant + admin user ────────────────────────────────
+    campaign_ids = [
+        str(c.get("campaign_id", "")).strip().upper()
+        for c in campaigns
+        if c.get("campaign_id")
+    ]
+
+    # ── Crear tenant + admin user + vicidial_config en 8001 ──────────────────
     try:
         auth_resp = http.post(
             f"{AUTH_BASE_URL}/api/tenants",
@@ -161,6 +222,7 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
                 "industry":         "rei",
                 "primary_color":    "#2563EB",
                 "max_seats":        10,
+                "campaign_ids":     campaign_ids,
                 "admin_email":      admin_email,
                 "admin_password":   admin_password,
                 "admin_first_name": admin_first,
@@ -174,37 +236,20 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
     except Exception as e:
         return {"ok": False, "error": f"No se pudo conectar al auth backend: {str(e)}"}
 
-    # ── Step 2: Save each campaign row to SQLite ───────────────────────────────
-    sc = sqlite3.connect(DB_PATH)
-    sc_cur = sc.cursor()
-    _init_tenants(sc_cur)
-    synced = []
-    for camp in campaigns:
-        cid = str(camp.get("campaign_id", "")).strip().upper()
-        tid = str(camp.get("tenant_id",   "")).strip().lower()
-        if cid and tid:
-            sc_cur.execute(
-                "INSERT OR IGNORE INTO tenants (tenant_id, tenant_name, campaign_id, role, active) VALUES (?,?,?,'client',1)",
-                (tid, tenant_name, cid),
-            )
-            synced.append({"campaign_id": cid, "tenant_id": tid})
-    sc.commit()
-    sc.close()
-
     return {
-        "ok":              True,
-        "tenant_name":     tenant_name,
-        "subdomain":       subdomain,
-        "campaigns_synced": synced,
+        "ok":               True,
+        "tenant_name":      tenant_name,
+        "subdomain":        subdomain,
+        "campaigns_synced": [{"campaign_id": cid} for cid in campaign_ids],
     }
 
 
-# ─── Scripts ──────────────────────────────────────────────────────────────────
+# ─── Scripts — se quedan en SQLite (son config de BRICK, no de auth) ─────────
 
 @router.get("/scripts/{campaign_id}")
 def admin_get_script(campaign_id: str):
     conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    cur  = conn.cursor()
     _init_scripts(cur)
     conn.commit()
     cur.execute(
@@ -222,8 +267,8 @@ def admin_get_script(campaign_id: str):
 def admin_save_script(campaign_id: str, payload: dict):
     script = str(payload.get("script", ""))
     now    = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+    conn   = sqlite3.connect(DB_PATH)
+    cur    = conn.cursor()
     _init_scripts(cur)
     cur.execute(
         "INSERT OR REPLACE INTO campaign_scripts (campaign_id, script, updated_at) VALUES (?,?,?)",

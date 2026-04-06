@@ -1,5 +1,5 @@
 # BRICK — CLAUDE.md
-## Última actualización: 5 de Abril, 2026 | Referencia: BRICK_Handover_V20
+## Última actualización: 6 de Abril, 2026 | Referencia: BRICK_Handover_V20 + sesión actual
 
 ---
 
@@ -10,7 +10,7 @@
 | BRICK Backend | `C:\Users\sosai\BRICK\app\` | 8000 | SQL, skiptrace, export, Data Burner, Admin |
 | Auth Backend | `C:\Users\sosai\BRICK-auth\backend\` | 8001 | JWT, agente, sesiones, tenants, users |
 | Frontend | `C:\Users\sosai\BRICK-frontend\src\` | 5173 | React 19 + TypeScript + Vite |
-| SQLite | `C:\Users\sosai\BRICK\vicidial.db` | — | Ruta ABSOLUTA siempre |
+| SQLite | `C:\Users\sosai\BRICK\vicidial.db` | — | Solo campaign_scripts y Burner config keys (NO tenants) |
 | MySQL Dialer | túnel SSH 127.0.0.1:3307 | 3307 | cron / 1234 / asterisk |
 | PostgreSQL Auth | docker en ASUS | 5432 | Tenants, Users, Leads, CRM |
 
@@ -45,6 +45,26 @@ C:\Users\sosai\BRICK\BRICK-watchdog.ps1
 ### BRICK-watchdog.ps1
 Monitorea puertos 8000 y 8001 cada 30s. Si alguno cae, mata todos los Python y los relanza.
 Archivo: `C:\Users\sosai\BRICK\BRICK-watchdog.ps1`
+
+---
+
+## FUENTES DE VERDAD — CUÁL DB PARA QUÉ
+
+| Dato | Base de datos | Dónde |
+|---|---|---|
+| Tenants + Users | PostgreSQL 5432 | BRICK-auth (8001) + lectura directa en 8000 vía psycopg2 |
+| VicidialConfig (campaign_ids) | PostgreSQL 5432 | tabla `vicidial_configs`, campo `campaign_ids` JSON |
+| Campaign Scripts | SQLite `vicidial.db` | tabla `campaign_scripts` — son config de BRICK, no de auth |
+| Burner config keys | SQLite `vicidial.db` | claves como `manual_stop__IBFEO`, `first_start_done__IBFEO` |
+| Leads / Dialing | MySQL Dialer (via túnel) | `vicidial_list`, `vicidial_campaigns` |
+
+**Regla:** NUNCA volver a escribir tenants en SQLite. PostgreSQL es la única fuente de verdad para tenants.
+
+### Migración realizada (6 Abril 2026)
+- `routes_admin.py` ahora lee tenants de PostgreSQL via `psycopg2` directo (sin HTTP a 8001)
+- SQLite dejó de ser fuente de verdad para tenants
+- Script de migración: `migrate_tenants_to_pg.py` — copió tenants SQLite → PostgreSQL (one-time)
+- `psycopg2-binary==2.9.10` agregado a `requirements.txt`
 
 ---
 
