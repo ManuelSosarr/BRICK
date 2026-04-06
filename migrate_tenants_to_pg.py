@@ -5,7 +5,7 @@ One-time migration: copia tenants de SQLite → PostgreSQL.
 Seguro de correr múltiples veces (INSERT OR IGNORE equivalente en PG).
 
 Cómo correr (en ASUS):
-    cd C:\Users\sosai\BRICK
+    cd C:/Users/sosai/BRICK
     python migrate_tenants_to_pg.py
 
 Cuándo correr:
