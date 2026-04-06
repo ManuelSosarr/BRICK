@@ -411,6 +411,7 @@ def burner_export(tenant_id: str = Query(...)):
     if not campaign_id:
         return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
+        # ── 1. Leads from ViciDial MySQL ──────────────────────────────────────
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
         cur.execute("""
@@ -423,26 +424,52 @@ def burner_export(tenant_id: str = Query(...)):
         leads = cur.fetchall()
         conn.close()
 
+        # ── 2. Skip trace source map: phone → source (from SQLite) ───────────
+        phone_source: dict = {}
+        try:
+            sc = sqlite3.connect(DB_PATH)
+            sc_cur = sc.cursor()
+            sc_cur.execute(
+                "SELECT phone, source FROM skiptrace_records WHERE campaign_id=?",
+                (campaign_id,)
+            )
+            for row in sc_cur.fetchall():
+                if row[0] and row[1]:
+                    phone_source[str(row[0]).strip()] = row[1]
+            sc.close()
+        except Exception:
+            pass  # skip trace table may not exist yet — column will show blank
+
+        def row_to_csv(x):
+            phone = str(x["phone_number"]).strip()
+            return [
+                x["first_name"], x["last_name"], phone,
+                x["address1"], x["city"], x["state"], x["postal_code"],
+                x["status"], x["called_count"], x["last_local_call_time"],
+                phone_source.get(phone, ""),
+            ]
+
         output = io.StringIO()
         writer = csv.writer(output)
-        headers = ["First Name", "Last Name", "Phone", "Address", "City", "State", "Zip", "Status", "Attempts", "Last Call"]
+        headers = ["First Name", "Last Name", "Phone", "Address", "City", "State",
+                   "Zip", "Status", "Attempts", "Last Call", "Skip Source"]
 
         writer.writerow([f"=== ANSWERED (AL) — {campaign_id} ==="])
         writer.writerow(headers)
         for x in [x for x in leads if x["status"] == "AL"]:
-            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
+            writer.writerow(row_to_csv(x))
 
         writer.writerow([])
         writer.writerow([f"=== POSSIBLE WORKING (NA/AB < 5 attempts) — {campaign_id} ==="])
         writer.writerow(headers)
         for x in [x for x in leads if x["status"] in ("NA", "AB") and x["called_count"] < 5]:
-            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
+            writer.writerow(row_to_csv(x))
 
         writer.writerow([])
         writer.writerow([f"=== EXCLUDED (DROP/PDROP/AA/DNCL/DNC) — {campaign_id} ==="])
         writer.writerow(headers)
         for x in [x for x in leads if x["status"] in ("DROP", "PDROP", "AA", "DNCL", "DNC")]:
-            writer.writerow([x["first_name"], x["last_name"], x["phone_number"], x["address1"], x["city"], x["state"], x["postal_code"], x["status"], x["called_count"], x["last_local_call_time"]])
+            writer.writerow(row_to_csv(x))
 
         output.seek(0)
         return StreamingResponse(
