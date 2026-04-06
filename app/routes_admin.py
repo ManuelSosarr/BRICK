@@ -27,8 +27,8 @@ def _pg():
 
 def _pg_list_tenants() -> list[dict]:
     """
-    Read tenants from PostgreSQL, expanding campaign_ids JSON into one row
-    per campaign (matches the previous SQLite row-per-campaign contract).
+    Read tenants from PostgreSQL. Returns ONE row per tenant with
+    campaign_ids as an array — never one row per campaign.
     """
     conn = _pg()
     cur  = conn.cursor()
@@ -46,28 +46,19 @@ def _pg_list_tenants() -> list[dict]:
 
     result = []
     for subdomain, name, status, campaign_ids in rows:
-        active = status in ("trial", "active")
-        camps  = campaign_ids or []           # JSON list or None
+        # str() guard — PostgreSQL enum may return enum object in some drivers
+        active = str(status).lower() in ("trial", "active")
+        camps  = campaign_ids or []
         if isinstance(camps, str):
             try: camps = json.loads(camps)
             except: camps = []
-        if camps:
-            for cid in camps:
-                result.append({
-                    "tenant_id":   subdomain,
-                    "tenant_name": name,
-                    "role":        "client",
-                    "campaign_id": cid,
-                    "active":      active,
-                })
-        else:
-            result.append({
-                "tenant_id":   subdomain,
-                "tenant_name": name,
-                "role":        "client",
-                "campaign_id": None,
-                "active":      active,
-            })
+        result.append({
+            "tenant_id":    subdomain,
+            "tenant_name":  name,
+            "role":         "client",
+            "campaign_ids": camps,   # array — frontend decides how to display
+            "active":       active,
+        })
     return result
 
 
