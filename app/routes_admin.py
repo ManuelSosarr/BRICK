@@ -3,8 +3,9 @@ import datetime as dt
 import json
 import requests as http
 import psycopg2
-from fastapi import APIRouter, Header
+from fastapi import APIRouter, Header, UploadFile, File, Form
 from typing import Optional
+from app.drawio_parser import parse_drawio
 
 from app.vici_connector import get_connection
 
@@ -334,3 +335,45 @@ def admin_save_script(campaign_id: str, payload: dict):
     conn.commit()
     conn.close()
     return {"ok": True, "campaign_id": campaign_id.upper(), "updated_at": now}
+
+
+@router.post("/scripts/{campaign_id}/import-drawio")
+async def admin_import_drawio(campaign_id: str, file: UploadFile = File(...)):
+    """
+    Recibe un archivo .drawio, lo parsea y guarda el script en SQLite.
+    El JSON guardado tiene el mismo formato que ReactFlow usa — compatible con Agent.tsx.
+    """
+    content = await file.read()
+    try:
+        xml_str = content.decode("utf-8")
+    except Exception:
+        return {"ok": False, "error": "El archivo no es UTF-8 válido"}
+
+    try:
+        script_dict = parse_drawio(xml_str)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+    # Guardar en formato ReactFlow-compatible que Agent.tsx ya entiende
+    # { nodes: [{id, data: ScriptNode}], edges: [] }
+    # Pero también guardamos el dict plano — Agent.tsx acepta ambos formatos
+    script_json = json.dumps(script_dict, ensure_ascii=False)
+    now = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_scripts(cur)
+    cur.execute(
+        "INSERT OR REPLACE INTO campaign_scripts (campaign_id, script, updated_at) VALUES (?,?,?)",
+        (campaign_id.upper(), script_json, now),
+    )
+    conn.commit()
+    conn.close()
+
+    return {
+        "ok":          True,
+        "campaign_id": campaign_id.upper(),
+        "nodes":       len(script_dict),
+        "updated_at":  now,
+        "preview":     {k: v["section"] for k, v in script_dict.items()},
+    }
