@@ -503,13 +503,30 @@ conn.close()
 
 | # | Feature | Prioridad | Notas |
 |---|---|---|---|
-| 1 | Push to CRM (Zapier → ResImpli) | Alta | URL Zapier no configurada aún — en hold |
+| 1 | Push to CRM (Zapier → ResImpli) | Hold | URL Zapier no configurada — esperando pago |
 | 2 | County Link | Media | Endpoint existe, verificar con datos reales en PropertyMaster |
 | 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
-| 4 | Campaña en dialer no visible tras crear vía SQL | Conocido | Fix: UPDATE vicidial_user_groups (ver diagnóstico) |
-| 5 | Data Burner — Import UI | Q2 2026 | Roadmap siguiente milestone |
-| 6 | Monthly sync all tenants | Q2 2026 | Actualmente solo bossbuy |
-| 7 | Dedicated server + static IP | Q2 2026 | Migración de ASUS a servidor dedicado |
+| 4 | GDrive upload post-sync | Pendiente | Necesita Service Account JSON de Google Cloud en ASUS |
+| 5 | Email notification post-sync | Pendiente | Necesita Gmail App Password en ASUS |
+| 6 | Script Editor — reemplazar con solución mejor | Pendiente | Ver decisión pendiente en sección SCRIPT EDITOR |
+| 7 | Dedicated server + static IP | Q2 Hold | Migración de ASUS cuando se afine |
+
+### Variables de entorno pendientes en ASUS (para GDrive + Email)
+```powershell
+$env:GDRIVE_SERVICE_ACCOUNT_JSON = "C:/Users/sosai/BRICK/service_account.json"
+$env:GDRIVE_FOLDER_ID            = "ID_DE_CARPETA_EN_DRIVE"
+$env:NOTIFY_EMAIL_FROM           = "tu@gmail.com"
+$env:NOTIFY_EMAIL_PASSWORD       = "xxxx xxxx xxxx xxxx"   # Gmail App Password
+$env:NOTIFY_EMAIL_TO             = "sosa.infx@gmail.com"
+```
+
+## SCRIPT EDITOR — DECISIÓN PENDIENTE
+
+El editor visual basado en ReactFlow (ScriptFlowEditor.tsx) no es suficientemente fluido para uso real.
+Opciones evaluadas:
+- ❌ Embed de draw.io — dependencia externa, sin control
+- ❌ Diseñar en draw.io y exportar/importar — fricción alta, formato frágil
+- ✅ **Recomendación: editor de texto estructurado** — el agente no necesita un diagrama, necesita el script en pantalla durante la llamada. Un editor tipo "tarjetas" (sección + texto + hint + botones de respuesta) es más rápido de construir, más rápido de usar y directo al caso de uso real.
 
 ### COMPLETADO en sesión V21 (6 Abril 2026)
 - ✅ Hangup button (`handleHangup` + `agentHungUp.current` flag)
@@ -565,3 +582,4 @@ conn.close()
 - **V19**: Refactor tenants (burner_tenants→tenants), manual_stop, BRICK rebranding, BRICK-watchdog.ps1
 - **V20**: Tenant Manager V2 (Sync + Scripts + Users), Auth /api/admin/* cross-tenant, SSH Mac fix, sin referencias al dialer en UI
 - **V21 (6 Abril 2026)**: Call cycle completo (hangup, customer hung up, dispo, auto-resume, logout, back button), disposiciones AMD/PS/INFLU, Script Flow Editor reescrito estilo Lucidchart, bcrypt pinado a 4.0.1
+- **V22 (6 Abril 2026)**: Weekly Auto-Sync — APScheduler (thu/fri/sat/sun 8:05pm EST), round-robin sync_day al crear tenant, campaign_list_map en vicidial_configs, wizard de sync extendido a 4 pasos (campañas→listas→info→confirmar), GDrive+email pendientes de credenciales
