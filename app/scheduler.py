@@ -403,6 +403,7 @@ def start_scheduler():
 
     _scheduler.start()
     log.info("[scheduler] APScheduler iniciado — sync a las 8:05pm EST (thu/fri/sat/sun)")
+    return _scheduler
 
 
 def stop_scheduler():
