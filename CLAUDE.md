@@ -1,5 +1,40 @@
 # BRICK — CLAUDE.md
-## Última actualización: 6 de Abril, 2026 | Referencia: BRICK_Handover_V20 + sesión actual
+## Última actualización: 6 de Abril, 2026 | Referencia: BRICK_Handover_V21
+
+---
+
+## REGLAS DE SESIÓN — CLAUDE CODE
+
+### Un chat activo a la vez
+Claude Code crea un **git worktree** por cada chat nuevo (branch `claude/nombre`). Si abres 3 chats en paralelo y editas los mismos archivos, puedes crear conflictos.
+
+**Regla:** Un solo chat activo trabajando en BRICK a la vez. Cierra los demás cuando termines una sesión.
+
+### Repos involucrados
+| Repo | Ruta Mac | GitHub |
+|---|---|---|
+| BRICK-auth (8001) | `/Users/manny.sosa/Documents/dialflow` | `ManuelSosarr/BRICK-auth` |
+| BRICK backend (8000) + frontend | `/Users/manny.sosa/vicidial-app/` | — (solo en ASUS) |
+| BRICK frontend | `/Users/manny.sosa/Documents/dialflow/frontend` | `ManuelSosarr/BRICK-frontend` |
+
+### Cómo limpiar worktrees muertos (Mac Terminal)
+```bash
+cd /Users/manny.sosa/Documents/dialflow
+git worktree list          # ver qué hay activo
+git worktree remove .claude/worktrees/NOMBRE --force
+git branch -d claude/NOMBRE
+```
+Antes de borrar: verificar que la branch ya está en main:
+```bash
+git branch --merged main   # si aparece ahí, es seguro borrar
+```
+
+### Workflow de sesión correcto
+1. Abrir **un solo** chat de Claude Code
+2. Trabajar, hacer commits, push a GitHub
+3. En ASUS: `git pull origin main` para cada repo
+4. Cerrar el chat cuando termines
+5. La próxima sesión arranca con CLAUDE.md actualizado = contexto completo
 
 ---
 
@@ -280,15 +315,20 @@ Formato: `{key}__{campaign_id}` — ej: `first_start_done__IBFEO`, `manual_stop_
 
 ## AGENT UI — LÓGICA CLAVE
 
-- **Resume**: `agc/api.php?action=pause_agent&pause_code=RESUME`
-- **Pause**: `PAUSE!{epoch}` como pause_code
-- **Hangup**: `agc/api.php` como primario — MySQL directo deja al agente en DEAD
-- **Disposiciones activas**: SET NI DEADL AMD PS INFLU CB NA WN DNC
+- **Resume**: `UPDATE external_pause='RESUME'` via MySQL ✅
+- **Pause**: `UPDATE external_pause='PAUSE!{epoch}'` via MySQL ✅
+- **Hangup**: `UPDATE external_hangup='Y'` via MySQL — `agentHungUp.current=true` antes de la llamada para que el polling no lo interprete como "customer hung up" ✅
+- **Disposiciones activas**: SET, NI, DEADL, AMD, PS, INFLU, CB, NA, WN, DNC
+  - `AMD` → `WNA` en STATUS_MAP (logic_classification.py)
+  - `PS` → `WNR` en STATUS_MAP (agregado 6 Abril 2026)
+  - `INFLU` → `WNR` en STATUS_MAP
 - **CRM_DISPOS**: solo SET y NI muestran "Push to CRM"
 - **Polling**: 1s con fire inmediato al montar
-- **Customer hung up**: detectado vía `agent_status`, dispara `_autoResume()`
+- **Customer hung up detection**: polling detecta INCALL→non-INCALL cuando `agentHungUp.current === false` → banner rojo + abre dispo panel automáticamente ✅
+- **Auto-resume tras dispo**: `_autoResume()` resetea todo el estado UI y llama Resume ✅
+- **Logout (botón)**: `handleLogout()` → llama `/api/agent/logout` + limpia localStorage + navega a `/login` ✅
+- **Back button + tab close**: `useEffect` en `loggedIn` registra `popstate` + `beforeunload` → `fetch` con `keepalive:true` para completar logout aunque el componente se desmonte ✅
 - **Agent name**: 3 capas de fallback
-- **Back button**: protegido
 - **Chrome Extension**: `window.postMessage(BRICK_PUSH_CRM)` → content.js → background.js → llena ResImpli
 
 ### agent_status pipe (CRÍTICO)
@@ -296,6 +336,16 @@ Formato: `{key}__{campaign_id}` — ej: `first_start_done__IBFEO`, `manual_stop_
 parts[0] = status (INCALL, PAUSED, etc.)
 parts[1] = uniqueid (V... — NO es el lead_id)
 parts[2] = lead_id  ← ESTE es el correcto
+```
+
+### Ciclo completo de llamada (verificado en prod — 6 Abril 2026)
+```
+1. Agent press Resume → external_pause='RESUME' → ViciDial inicia dialing
+2. Polling detecta lead → status='oncall', timer inicia
+3a. Agent press Hangup → agentHungUp=true → external_hangup='Y' → dispo panel abre
+3b. Customer cuelga → polling detecta no-lead + agentHungUp=false → banner "Customer hung up" → dispo panel abre
+4. Agent selecciona dispo → external_status UPDATE en ViciDial
+5. _autoResume() → resetea estado → llama Resume → vuelta al paso 1
 ```
 
 ---
@@ -366,9 +416,10 @@ const visibleModules = isMaster ? [...MODULES, ...MASTER_MODULES] : MODULES
 | `src/App.tsx` | Rutas |
 | `src/components/AdminLayout.tsx` | Shell admin, tabs, isMaster |
 | `src/api/client.ts` | axios clients: `client` (8001), `brickClient` (8000) |
-| `src/pages/admin/TenantManager.tsx` | Tenant Manager V2 (3 tabs) |
+| `src/pages/admin/TenantManager.tsx` | Tenant Manager V2 (3 tabs: Tenants, Scripts→redirect, Users) |
+| `src/pages/admin/ScriptFlowEditor.tsx` | Editor visual Lucidchart-style (ReactFlow) — palette izq, canvas centro, props derecha |
 | `src/pages/admin/DataBurner.tsx` | Data Burner UI |
-| `src/pages/Agent.tsx` | Agent UI + Chrome Extension bridge |
+| `src/pages/Agent.tsx` | Agent UI — call cycle completo, back button protection, auto-resume |
 | `src/pages/Login.tsx` | Login con subdomain (.brick.com) |
 
 ---
@@ -452,11 +503,24 @@ conn.close()
 
 | # | Feature | Prioridad | Notas |
 |---|---|---|---|
-| 1 | Push to CRM (Chrome Extension) | Alta | Reescrito, no probado en llamada real |
+| 1 | Push to CRM (Zapier → ResImpli) | Alta | URL Zapier no configurada aún — en hold |
 | 2 | County Link | Media | Endpoint existe, verificar con datos reales en PropertyMaster |
 | 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
-| 4 | Deprovision tenant | Media | Botón "Eliminar tenant" en TM → borra SQLite + llama 8001 + dialer |
-| 5 | Campaña en dialer no visible tras crear vía SQL | Conocido | Fix: UPDATE vicidial_user_groups (ver diagnóstico) |
+| 4 | Campaña en dialer no visible tras crear vía SQL | Conocido | Fix: UPDATE vicidial_user_groups (ver diagnóstico) |
+| 5 | Data Burner — Import UI | Q2 2026 | Roadmap siguiente milestone |
+| 6 | Monthly sync all tenants | Q2 2026 | Actualmente solo bossbuy |
+| 7 | Dedicated server + static IP | Q2 2026 | Migración de ASUS a servidor dedicado |
+
+### COMPLETADO en sesión V21 (6 Abril 2026)
+- ✅ Hangup button (`handleHangup` + `agentHungUp.current` flag)
+- ✅ Customer hung up detection (polling INCALL→non-INCALL)
+- ✅ Dispo saves to ViciDial — verificado e2e en llamada real
+- ✅ Disposiciones AMD, PS, INFLU — en UI + STATUS_MAP (`PS` agregado a `logic_classification.py`)
+- ✅ Auto-return to waiting after dispo (`_autoResume()`)
+- ✅ Logout button (`handleLogout`)
+- ✅ Back button + tab close protection (`popstate` + `beforeunload` con `keepalive:true`)
+- ✅ Script Flow Editor — reescrito estilo Lucidchart (palette + canvas + properties panel)
+- ✅ bcrypt 5.x → pinado a 4.0.1 (rompe passlib si se actualiza)
 
 ---
 
@@ -487,6 +551,9 @@ conn.close()
 | F21 | SSH key en Mac necesita chmod 600 | Sin permisos correctos, SSH ignora la llave y pide password |
 | F22 | Sin referencias al dialer en UI | Regla de branding: usar términos genéricos. Nunca el nombre del vendor |
 | F23 | Un auth tenant por cliente, múltiples rows SQLite | auth usa subdomain único. SQLite tiene 1 row por campaña del cliente |
+| F24 | bcrypt 5.x rompe passlib | passlib requiere bcrypt==4.0.1 exacto. pip install -r requirements.txt puede upgradear a 5.x. Siempre verificar con `pip show bcrypt` |
+| F25 | agentHungUp.current debe setearse ANTES del fetch | Si se setea después, el polling puede disparar "customer hung up" en la ventana de ~1s entre hangup y respuesta del backend |
+| F26 | `keepalive:true` en fetch para logout al cerrar tab | El componente se desmonta antes de que fetch complete. Sin keepalive, el logout no llega al backend |
 
 ---
 
@@ -496,4 +563,5 @@ conn.close()
 - V16–V17: Data Burner v1, Multi-tenant base
 - V18.1.2: Data Burner completo, burner_tenants, Billing, Push V19
 - **V19**: Refactor tenants (burner_tenants→tenants), manual_stop, BRICK rebranding, BRICK-watchdog.ps1
-- **V20 (sesión actual)**: Tenant Manager V2 (Sync + Scripts + Users), Auth /api/admin/* cross-tenant, SSH Mac fix, sin referencias al dialer en UI
+- **V20**: Tenant Manager V2 (Sync + Scripts + Users), Auth /api/admin/* cross-tenant, SSH Mac fix, sin referencias al dialer en UI
+- **V21 (6 Abril 2026)**: Call cycle completo (hangup, customer hung up, dispo, auto-resume, logout, back button), disposiciones AMD/PS/INFLU, Script Flow Editor reescrito estilo Lucidchart, bcrypt pinado a 4.0.1

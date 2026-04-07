@@ -18,7 +18,7 @@ DEFAULT_STATUS_MAP = {
 
     # WNR - Working Not Rediable
     "SALE": "WNR", "SOLD": "WNR", "NI": "WNR", "DNC": "WNR",
-    "INFLU": "WNR", "INFL": "WNR", "DEADL": "WNR", "SCRN": "WNR",
+    "INFLU": "WNR", "INFL": "WNR", "DEADL": "WNR", "SCRN": "WNR", "PS": "WNR",
 }
 
 def get_flag(status: str, custom_map: dict = None) -> str:

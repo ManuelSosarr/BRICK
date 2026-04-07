@@ -177,12 +177,49 @@ def admin_vici_unassigned():
 
 # ─── Sync — registrar tenant nuevo en BRICK ──────────────────────────────────
 
+SYNC_DAYS = ["thu", "fri", "sat", "sun"]
+
+def _next_sync_day() -> str:
+    """Round-robin: cuenta tenants existentes y asigna el siguiente día."""
+    conn = _pg()
+    cur  = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM vicidial_configs")
+    count = cur.fetchone()[0]
+    cur.close(); conn.close()
+    return SYNC_DAYS[count % 4]
+
+
+def _pg_update_vicidial_config(tenant_uuid: str, campaign_ids: list, campaign_list_map: dict, sync_day: str):
+    """Escribe/actualiza campaign_ids, campaign_list_map y sync_day en vicidial_configs."""
+    conn = _pg()
+    cur  = conn.cursor()
+    cur.execute("SELECT id FROM vicidial_configs WHERE tenant_id=%s", (tenant_uuid,))
+    row = cur.fetchone()
+    if row:
+        cur.execute("""
+            UPDATE vicidial_configs
+            SET campaign_ids=%s, campaign_list_map=%s, sync_day=%s, updated_at=NOW()
+            WHERE tenant_id=%s
+        """, (json.dumps(campaign_ids), json.dumps(campaign_list_map), sync_day, tenant_uuid))
+    else:
+        cur.execute("""
+            INSERT INTO vicidial_configs
+                (id, tenant_id, api_url, api_user, api_pass,
+                 campaign_ids, campaign_list_map, sync_day, is_active, created_at, updated_at)
+            VALUES
+                (gen_random_uuid(), %s, '', '', '',
+                 %s, %s, %s, true, NOW(), NOW())
+        """, (tenant_uuid, json.dumps(campaign_ids), json.dumps(campaign_list_map), sync_day))
+    conn.commit()
+    cur.close(); conn.close()
+
+
 @router.post("/tenants/sync")
 def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)):
     """
     Registra un tenant de ViciDial en BRICK.
     - Crea auth tenant + admin user en 8001 (PostgreSQL).
-    - Ya NO escribe en SQLite — PostgreSQL es la fuente de verdad.
+    - Guarda campaign_list_map y sync_day en vicidial_configs.
     """
     tenant_name    = str(payload.get("tenant_name",     "")).strip()
     subdomain      = str(payload.get("subdomain",       "")).strip().lower()
@@ -190,7 +227,7 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
     admin_password = str(payload.get("admin_password",  "")).strip()
     admin_first    = str(payload.get("admin_first_name","")).strip()
     admin_last     = str(payload.get("admin_last_name", "")).strip()
-    campaigns      = payload.get("campaigns", [])  # [{campaign_id, tenant_id}]
+    campaigns      = payload.get("campaigns", [])  # [{campaign_id, list_id}]
 
     if not all([tenant_name, subdomain, admin_email, admin_password, admin_first, admin_last]):
         return {"ok": False, "error": "Faltan campos requeridos"}
@@ -202,8 +239,20 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
         for c in campaigns
         if c.get("campaign_id")
     ]
+    # {"IBFEO": "806", "IBFEO2": "807"}
+    campaign_list_map = {
+        str(c.get("campaign_id", "")).strip().upper(): str(c.get("list_id", "")).strip()
+        for c in campaigns
+        if c.get("campaign_id") and c.get("list_id")
+    }
 
-    # ── Crear tenant + admin user + vicidial_config en 8001 ──────────────────
+    # Auto-asignar sync_day antes de crear (round-robin sobre tenants existentes)
+    try:
+        sync_day = _next_sync_day()
+    except Exception:
+        sync_day = "thu"
+
+    # ── Crear tenant + admin user en 8001 ────────────────────────────────────
     try:
         auth_resp = http.post(
             f"{AUTH_BASE_URL}/api/tenants",
@@ -227,11 +276,28 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
     except Exception as e:
         return {"ok": False, "error": f"No se pudo conectar al auth backend: {str(e)}"}
 
+    # ── Guardar campaign_list_map + sync_day en vicidial_configs ─────────────
+    try:
+        tenant_uuid = auth_resp.json().get("id")
+        if tenant_uuid:
+            _pg_update_vicidial_config(tenant_uuid, campaign_ids, campaign_list_map, sync_day)
+    except Exception as e:
+        # No es fatal — tenant creado, config se puede editar luego
+        return {
+            "ok":               True,
+            "tenant_name":      tenant_name,
+            "subdomain":        subdomain,
+            "sync_day":         sync_day,
+            "campaigns_synced": [{"campaign_id": cid} for cid in campaign_ids],
+            "warning":          f"Tenant creado pero no se pudo guardar campaign_list_map: {str(e)}",
+        }
+
     return {
         "ok":               True,
         "tenant_name":      tenant_name,
         "subdomain":        subdomain,
-        "campaigns_synced": [{"campaign_id": cid} for cid in campaign_ids],
+        "sync_day":         sync_day,
+        "campaigns_synced": [{"campaign_id": cid, "list_id": campaign_list_map.get(cid, "")} for cid in campaign_ids],
     }
 
 

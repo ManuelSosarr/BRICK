@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.database import engine, Base
@@ -9,10 +10,19 @@ from app.routes_skiptrace import router as skiptrace_router
 from app.routes_agent import router as agent_router
 from app.routes_burner import router as burner_router
 from app.routes_admin import router as admin_router
+from app.scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="ViciDial Analytics", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    start_scheduler()
+    yield
+    stop_scheduler()
+
+
+app = FastAPI(title="BRICK API", version="2.0.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -24,7 +34,7 @@ app.add_middleware(
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "ViciDial Analytics API running"}
+    return {"status": "ok", "message": "BRICK API running"}
 
 app.include_router(upload_router,    prefix="/api/upload",    tags=["upload"])
 app.include_router(dashboard_router, prefix="/api/dashboard", tags=["dashboard"])
