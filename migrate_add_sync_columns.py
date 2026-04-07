@@ -4,8 +4,8 @@ migrate_add_sync_columns.py
 Agrega campaign_list_map y sync_day a vicidial_configs en PostgreSQL.
 Seguro de correr múltiples veces (ALTER IF NOT EXISTS).
 
-Cómo correr (ASUS PowerShell — UNA SOLA VEZ):
-    cd C:\Users\sosai\BRICK
+Como correr (ASUS PowerShell -- UNA SOLA VEZ):
+    cd C:/Users/sosai/BRICK
     python migrate_add_sync_columns.py
 """
 
