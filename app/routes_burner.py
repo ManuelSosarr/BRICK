@@ -428,10 +428,10 @@ def burner_push(payload: dict):
         cur.execute("""
             UPDATE vicidial_list
             SET status='NEW', called_since_last_reset='N', called_count=0,
-                list_id=%s, campaign_id=%s
+                list_id=%s
             WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
             AND status IN ('AL', 'PWORK')
-        """, (dest_list_id, destination, source))
+        """, (dest_list_id, source))
         pushed = cur.rowcount
         conn.commit()
         cur.close()
