@@ -407,24 +407,43 @@ def burner_push_preview(payload: dict):
         return {"error": str(e)}
 
 
-@router.post("/push")
-def burner_push(payload: dict):
-    source_tenant_id  = str(payload.get("source_tenant_id", "")).strip()
-    destination       = str(payload.get("destination_campaign_id", "")).strip()
-    if not source_tenant_id or not destination:
-        return {"error": "source_tenant_id and destination_campaign_id required"}
-    source = get_campaign_for_tenant(source_tenant_id)
-    if not source:
-        return {"error": f"No campaign assigned to tenant '{source_tenant_id}'"}
+@router.get("/lists")
+def burner_lists(campaign_id: str = Query(...)):
+    """Return active lists for a given campaign_id."""
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT list_id FROM vicidial_lists WHERE campaign_id=%s LIMIT 1", (destination,))
+        cur.execute(
+            "SELECT list_id, list_name FROM vicidial_lists WHERE campaign_id=%s AND active='Y' ORDER BY list_name",
+            (campaign_id,)
+        )
+        lists = cur.fetchall()
+        cur.close()
+        conn.close()
+        return lists
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@router.post("/push")
+def burner_push(payload: dict):
+    tenant_id    = str(payload.get("tenant_id", "")).strip()
+    dest_list_id = str(payload.get("dest_list_id", "")).strip()
+    if not tenant_id or not dest_list_id:
+        return {"error": "tenant_id and dest_list_id required"}
+    source = get_campaign_for_tenant(tenant_id)
+    if not source:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
+    try:
+        conn = get_connection()
+        cur = conn.cursor(dictionary=True)
+        # Verify dest list exists and get its campaign for response
+        cur.execute("SELECT campaign_id FROM vicidial_lists WHERE list_id=%s LIMIT 1", (dest_list_id,))
         dest_list = cur.fetchone()
         if not dest_list:
             conn.close()
-            return {"error": f"Destination campaign '{destination}' not found"}
-        dest_list_id = dest_list["list_id"]
+            return {"error": f"List '{dest_list_id}' not found"}
+        dest_campaign = dest_list["campaign_id"]
         cur.execute("""
             UPDATE vicidial_list
             SET status='NEW', called_since_last_reset='N', called_count=0,
@@ -436,7 +455,7 @@ def burner_push(payload: dict):
         conn.commit()
         cur.close()
         conn.close()
-        return {"pushed": pushed, "source": source, "destination": destination}
+        return {"pushed": pushed, "source": source, "destination": dest_campaign, "dest_list_id": dest_list_id}
     except Exception as e:
         return {"error": str(e)}
 
