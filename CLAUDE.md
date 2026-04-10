@@ -1,5 +1,5 @@
 # BRICK — CLAUDE.md
-## Última actualización: 6 de Abril, 2026 | Referencia: BRICK_Handover_V21
+## Última actualización: 10 de Abril, 2026 | Referencia: BRICK_Handover_V23
 
 ---
 
@@ -54,27 +54,23 @@ git branch --merged main   # si aparece ahí, es seguro borrar
 - **Mac** = desarrollo. `git push` desde Mac, `git pull` en ASUS.
 - **Dialer Server**: root@144.126.146.250
 - **Túnel SSH**: llave en `C:\Users\sosai\.ssh\vicidial_key` (ASUS) y `~/.ssh/vicidial_key` (Mac)
-- **NGROK**: tunneling del frontend para acceso externo (corre en BRICK.ps1)
+- **NGROK**: tunneling del frontend para acceso externo — se lanza MANUALMENTE (no en BRICK.ps1). Ver popup al iniciar BRICK.
 
 ### Startup completo (ASUS — BRICK.ps1)
 ```powershell
-# Túnel SSH al dialer
-ssh -i C:\Users\sosai\.ssh\vicidial_key -N -L 3307:localhost:3306 root@144.126.146.250
-
-# Backend BRICK (8000)
-cd C:\Users\sosai\BRICK; uvicorn app.main:app --port 8000
-
-# Backend Auth (8001)
-cd C:\Users\sosai\BRICK-auth\backend; python main.py
-
-# Frontend
-cd C:\Users\sosai\BRICK-frontend; npm run dev
-
-# NGROK (acceso externo)
-ngrok http 5173 --log=stdout
-
-# Watchdog (auto-restart backends caídos)
-C:\Users\sosai\BRICK\BRICK-watchdog.ps1
+# Mata python y node existentes
+# Levanta Docker (BRICK-auth)
+# Auth backend (8001) — git pull + pip install + python main.py
+# BRICK backend (8000) — git pull + uvicorn --reload --port 8000
+# Frontend — git pull + npm run dev --host 0.0.0.0 --port 5173
+# Túnel SSH al dialer — -L 3307:127.0.0.1:3306 root@144.126.146.250
+# Abre browser http://localhost:5173
+# Popup con instrucciones de NGROK (manual)
+```
+**NGROK — arranque manual** (NO está en BRICK.ps1):
+```powershell
+ngrok http 5173
+# Ver URL pública en http://localhost:4040
 ```
 
 ### BRICK-watchdog.ps1
@@ -199,9 +195,17 @@ const isMaster = getTokenPayload()?.role === 'superadmin'
 ### Tenant Manager — 3 Tabs
 | Tab | Función |
 |---|---|
-| **Tenants** | Lista tenants en BRICK SQLite. Botón Sync abre wizard de 3 pasos |
-| **Scripts** | Editor de script de llamada por campaña. Guardado en SQLite `campaign_scripts` |
+| **Tenants** | Lista tenants en BRICK SQLite. Botón Sync abre wizard de 4 pasos |
+| **Scripts** | Redirect al Script Flow Editor |
 | **Users** | Lista TODOS los users de TODOS los tenants. Crear, editar, desactivar |
+
+### Wizard Sync — 4 pasos
+1. **Campañas** — checkboxes con campañas no asignadas en BRICK
+2. **Listas** — checkboxes multi-select por campaña (usa `/api/burner/lists` — NO `/api/vici/lists` que filtra por tenant)
+3. **Info Tenant** — nombre, subdomain, admin email/pwd/nombre
+4. **Confirmar** — review y ejecutar
+
+**Nota crítica**: En el paso 2, usar siempre `/api/burner/lists?campaign_id=X`. `/api/vici/lists` filtra por tenant_id del JWT — el superadmin no tiene tenant_id, devuelve vacío.
 
 ### Tabla `campaign_scripts` SQLite (nueva, Abril 2026)
 ```sql
@@ -245,13 +249,13 @@ DELETE /api/admin/users/{id}                   → desactiva user
 # Data Burner
 GET    /api/burner/tenants                     → lista tenants activos (para dropdown)
 GET    /api/burner/status?tenant_id=X          → estado del agente remoto
-POST   /api/burner/toggle                      → START/STOP agente remoto
-GET    /api/burner/kpis?tenant_id=X            → KPIs tiempo real
-GET    /api/burner/summary?tenant_id=X         → resumen 7 días
-GET    /api/burner/billing?tenant_id=X         → minutos facturados
-POST   /api/burner/push/preview?tenant_id=X    → preview push de leads (V19)
-POST   /api/burner/push?tenant_id=X            → ejecuta push de leads
-GET    /api/burner/export?tenant_id=X          → descarga CSV (3 buckets)
+POST   /api/burner/toggle                      → START/STOP agente + SSH AST_VDauto_dial
+GET    /api/burner/weekly?tenant_id=X          → resumen 7 días (PWORK/EXCLUD/AL)
+GET    /api/burner/minutes?tenant_id=X         → minutos facturados (solo isMaster)
+GET    /api/burner/lists?campaign_id=X         → listas activas de una campaña (sin restricción de tenant)
+POST   /api/burner/push/preview                → preview push (source_tenant_id + destination_campaign_id)
+POST   /api/burner/push                        → ejecuta push {tenant_id, dest_list_id}
+GET    /api/burner/export?tenant_id=X          → CSV (AL / PWORK / EXCLUD)
 
 # Admin / Módulos
 POST   /api/upload/sync                        → upload leads → dialer
@@ -292,12 +296,23 @@ if not burned and manual_stop != "true" and 7 <= hour < 20:
     # reactivar
 ```
 
-### 3 Buckets
-| Bucket | Statuses | Acción |
+### Configuración crítica IBFEO (10 Abril 2026)
+- `available_only_ratio_tally = N` → motor no depende de agentes humanos activos
+- `AST_VDauto_dial.pl --campaign=IBFEO --loop` corre en el servidor ViciDial — arrancado/parado via SSH desde `routes_burner.py` toggle START/STOP
+- `AL` removido de `dial_statuses` → Burner nunca re-llama a quien ya contestó
+- `AL` protegido con `called_since_last_reset='Y'` via UPDATE directo
+
+### 3 Buckets (statuses actualizados — 10 Abril 2026)
+| Bucket | Status | Acción |
 |---|---|---|
-| ANSWERED | AL | Push como NEW |
-| POSSIBLE WORKING | NA / AB < 5 intentos en 7 días | Push como NEW |
-| EXCLUDED | DROP / PDROP / AA / DNCL / DNC | NUNCA se toca |
+| ANSWERED | `AL` | Push como NEW |
+| POSSIBLE WORKING | `PWORK` | Push como NEW — reemplaza NA/AB |
+| EXCLUDED | `EXCLUD` | NUNCA se toca — reemplaza DROP/PDROP/AA/DNCL/DNC |
+
+**Todos los endpoints actualizados**: `export`, `weekly`, `push`, `push/preview`, `_process_hopper` usan `PWORK` y `EXCLUD`.
+
+### Lista de datos
+- Lista **808** — 2,388 leads cargados del Master Global Clean (10 Abril 2026)
 
 ### SQLite config keys
 Formato: `{key}__{campaign_id}` — ej: `first_start_done__IBFEO`, `manual_stop__IBFEO`
@@ -310,6 +325,15 @@ Formato: `{key}__{campaign_id}` — ej: `first_start_done__IBFEO`, `manual_stop_
 | NA | 148 | 0 |
 | PDROP | 45 | 0 |
 | **TOTAL** | **521** | **240** — $2.40 |
+
+### SSH toggle — AST_VDauto_dial
+```python
+# START: lanza motor en ViciDial via SSH
+nohup /usr/share/astguiclient/AST_VDauto_dial.pl --campaign={id} --loop > /dev/null 2>&1 &
+# STOP: mata proceso
+pkill -f 'AST_VDauto_dial.pl --campaign={id}'
+# Llave: C:\Users\sosai\.ssh\vicidial_key | Host: root@144.126.146.250
+```
 
 ---
 
@@ -508,7 +532,7 @@ conn.close()
 | 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
 | 4 | GDrive upload post-sync | Pendiente | Necesita Service Account JSON de Google Cloud en ASUS |
 | 5 | Email notification post-sync | Pendiente | Necesita Gmail App Password en ASUS |
-| 6 | Script Editor — reemplazar con solución mejor | Pendiente | Ver decisión pendiente en sección SCRIPT EDITOR |
+| 6 | Script Editor — draw.io import | Pendiente | Importar XML de draw.io → guardar → asignar a campaña. SIN lógica de disposiciones |
 | 7 | Dedicated server + static IP | Q2 Hold | Migración de ASUS cuando se afine |
 
 ### Variables de entorno pendientes en ASUS (para GDrive + Email)
@@ -520,13 +544,43 @@ $env:NOTIFY_EMAIL_PASSWORD       = "xxxx xxxx xxxx xxxx"   # Gmail App Password
 $env:NOTIFY_EMAIL_TO             = "sosa.infx@gmail.com"
 ```
 
-## SCRIPT EDITOR — DECISIÓN PENDIENTE
+## SCRIPT EDITOR — DECISIÓN
 
-El editor visual basado en ReactFlow (ScriptFlowEditor.tsx) no es suficientemente fluido para uso real.
-Opciones evaluadas:
-- ❌ Embed de draw.io — dependencia externa, sin control
-- ❌ Diseñar en draw.io y exportar/importar — fricción alta, formato frágil
-- ✅ **Recomendación: editor de texto estructurado** — el agente no necesita un diagrama, necesita el script en pantalla durante la llamada. Un editor tipo "tarjetas" (sección + texto + hint + botones de respuesta) es más rápido de construir, más rápido de usar y directo al caso de uso real.
+Flujo decidido: **draw.io → importar XML → guardar → asignar a campaña**.
+
+1. Usuario diseña el script en [draw.io.com](https://draw.io.com)
+2. Exporta como `.drawio` (XML)
+3. En BRICK → Script Editor → botón "Importar .drawio"
+4. Backend parsea XML con `drawio_parser.py` → convierte a ScriptNode dict
+5. Script guardado en SQLite `campaign_scripts`
+6. Agente ve el script durante la llamada (Agent.tsx soporta formato flat dict)
+
+### Convenciones del script
+- Variables: `{name}`, `{address}`, `{agent}`, `{owner_name}`
+- Hints de coaching: `[HINT: texto]` en el nodo → extraído al campo `hint` por `_split_hint()`
+- Script REI completo: `backend/sample_scripts/rei_script.json`
+
+### Archivos clave
+- `app/drawio_parser.py` — parser XML → ScriptNode dict (con `_split_hint` wired)
+- `app/routes_admin.py` — `POST /api/admin/scripts/{campaign_id}/import-drawio`
+- `frontend/src/pages/admin/ScriptFlowEditor.tsx` — botón "Importar .drawio"
+- `frontend/src/pages/Agent.tsx` — soporta formato A (flat dict draw.io) y formato B (ReactFlow JSON)
+
+### COMPLETADO en sesión V23 (10 Abril 2026)
+- ✅ Statuses PWORK + EXCLUD — reemplazan NA/AB/DROP/PDROP/AA en todos los endpoints del Burner
+- ✅ SSH toggle START/STOP — `AST_VDauto_dial.pl` arrancado/parado desde `routes_burner.py` via SSH
+- ✅ `available_only_ratio_tally=N` en IBFEO — motor independiente de agentes humanos
+- ✅ `AL` removido de `dial_statuses` + protegido con `called_since_last_reset='Y'`
+- ✅ Push to Campaign — 2 dropdowns (Campaña + Lista) para todos los roles
+- ✅ `/api/burner/lists` — nuevo endpoint sin restricción de tenant
+- ✅ `/api/burner/push` — recibe `{tenant_id, dest_list_id}` directo
+- ✅ Billing de minutos — solo visible para `isMaster`
+- ✅ Tenant Manager wizard — listas multi-select (checkboxes) por campaña
+- ✅ TenantManager usa `/api/burner/lists` en vez de `/api/vici/lists`
+- ✅ draw.io parser — `_split_hint()` wired en construcción de nodos
+- ✅ `sample_scripts/rei_script.json` — script REI completo con variables y hints
+- ✅ NGROK quitado de BRICK.ps1 — popup de instrucciones al iniciar
+- ✅ `vite.config.ts` — `server.allowedHosts: 'all'` para compatibilidad con ngrok
 
 ### COMPLETADO en sesión V21 (6 Abril 2026)
 - ✅ Hangup button (`handleHangup` + `agentHungUp.current` flag)
@@ -571,6 +625,12 @@ Opciones evaluadas:
 | F24 | bcrypt 5.x rompe passlib | passlib requiere bcrypt==4.0.1 exacto. pip install -r requirements.txt puede upgradear a 5.x. Siempre verificar con `pip show bcrypt` |
 | F25 | agentHungUp.current debe setearse ANTES del fetch | Si se setea después, el polling puede disparar "customer hung up" en la ventana de ~1s entre hangup y respuesta del backend |
 | F26 | `keepalive:true` en fetch para logout al cerrar tab | El componente se desmonta antes de que fetch complete. Sin keepalive, el logout no llega al backend |
+| F27 | `campaign_id` no existe en `vicidial_list` | La campaña se asigna via `list_id`. UPDATE en vicidial_list nunca incluye `campaign_id` en SET |
+| F28 | `/api/vici/lists` filtra por tenant_id del JWT | El superadmin no tiene tenant_id → devuelve vacío. Usar `/api/burner/lists` para acceso sin restricción |
+| F29 | `eslint-disable` no suprime errores de TypeScript | Para variables no usadas en TS usar prefijo `_` (ej: `_previewing`) |
+| F30 | Vite dev server bloquea hosts externos | Agregar `server: { allowedHosts: 'all' }` en `vite.config.ts` para ngrok |
+| F31 | `git pull` falla si vicidial.db está bloqueado | Matar python ANTES de hacer git pull en ASUS |
+| F32 | PWORK/EXCLUD son statuses custom de BRICK | No son nativos de ViciDial — se deben configurar en el dialer manualmente |
 
 ---
 
@@ -583,3 +643,4 @@ Opciones evaluadas:
 - **V20**: Tenant Manager V2 (Sync + Scripts + Users), Auth /api/admin/* cross-tenant, SSH Mac fix, sin referencias al dialer en UI
 - **V21 (6 Abril 2026)**: Call cycle completo (hangup, customer hung up, dispo, auto-resume, logout, back button), disposiciones AMD/PS/INFLU, Script Flow Editor reescrito estilo Lucidchart, bcrypt pinado a 4.0.1
 - **V22 (6 Abril 2026)**: Weekly Auto-Sync — APScheduler (thu/fri/sat/sun 8:05pm EST), round-robin sync_day al crear tenant, campaign_list_map en vicidial_configs, wizard de sync extendido a 4 pasos (campañas→listas→info→confirmar), GDrive+email pendientes de credenciales
+- **V23 (10 Abril 2026)**: Statuses PWORK/EXCLUD en todos los endpoints Burner, SSH toggle AST_VDauto_dial, available_only_ratio_tally=N, Push to Campaign 2 dropdowns + multi-select listas, /api/burner/lists sin restricción tenant, billing solo isMaster, draw.io parser _split_hint wired, rei_script.json, NGROK manual + popup BRICK.ps1, vite allowedHosts
