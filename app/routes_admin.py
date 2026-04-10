@@ -228,7 +228,7 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
     admin_password = str(payload.get("admin_password",  "")).strip()
     admin_first    = str(payload.get("admin_first_name","")).strip()
     admin_last     = str(payload.get("admin_last_name", "")).strip()
-    campaigns      = payload.get("campaigns", [])  # [{campaign_id, list_id}]
+    campaigns      = payload.get("campaigns", [])  # [{campaign_id, list_ids: []}]
 
     if not all([tenant_name, subdomain, admin_email, admin_password, admin_first, admin_last]):
         return {"ok": False, "error": "Faltan campos requeridos"}
@@ -240,11 +240,11 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
         for c in campaigns
         if c.get("campaign_id")
     ]
-    # {"IBFEO": "806", "IBFEO2": "807"}
+    # {"IBFEO": ["806", "807"], ...}
     campaign_list_map = {
-        str(c.get("campaign_id", "")).strip().upper(): str(c.get("list_id", "")).strip()
+        str(c.get("campaign_id", "")).strip().upper(): [str(l).strip() for l in c.get("list_ids", []) if l]
         for c in campaigns
-        if c.get("campaign_id") and c.get("list_id")
+        if c.get("campaign_id")
     }
 
     # Auto-asignar sync_day antes de crear (round-robin sobre tenants existentes)
@@ -298,7 +298,7 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
         "tenant_name":      tenant_name,
         "subdomain":        subdomain,
         "sync_day":         sync_day,
-        "campaigns_synced": [{"campaign_id": cid, "list_id": campaign_list_map.get(cid, "")} for cid in campaign_ids],
+        "campaigns_synced": [{"campaign_id": cid, "list_ids": campaign_list_map.get(cid, [])} for cid in campaign_ids],
     }
 
 
