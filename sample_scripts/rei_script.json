@@ -1,0 +1,469 @@
+{
+  "INTRO": {
+    "id": "INTRO",
+    "section": "Introduction",
+    "text": "Hi {name}... My name is {agent}, and I am calling about buying {address} for cash, is this a good time to talk?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Yes", "next": "OPENER", "style": "yes"},
+      {"label": "No", "next": "PUSHBACK", "style": "no"}
+    ]
+  },
+
+  "OPENER": {
+    "id": "OPENER",
+    "section": "Introduction",
+    "text": "Awesome! Our process is very simple. I need to ask you some basic questions about the property, so we can decide if it makes sense to take any next steps. Sounds Good?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sounds Good", "next": "OCCUPANCY", "style": "yes"}
+    ]
+  },
+
+  "PUSHBACK": {
+    "id": "PUSHBACK",
+    "section": "Introduction",
+    "text": "I figured you would say that. That is exactly why I called. Before I let you go, Just to confirm is this {owner_name} owner of {address}?",
+    "hint": "IF YES → Thanks, do you mind me asking, are you living in the property or is this an investment of yours? Let's see if they want to keep talking… Follow the script!",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Keep Talking", "next": "OCCUPANCY", "style": "yes"},
+      {"label": "Not Interested", "next": "END_NI", "style": "no"}
+    ]
+  },
+
+  "OCCUPANCY": {
+    "id": "OCCUPANCY",
+    "section": "Occupancy",
+    "text": "Are you living in the property or is it an investment?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Owner Occupied", "next": "OWNER_OCCUPIED", "style": "neutral"},
+      {"label": "Tenant", "next": "TENANT", "style": "neutral"},
+      {"label": "Relative/Friend", "next": "RELATIVE_FRIEND", "style": "neutral"},
+      {"label": "Vacant", "next": "VACANT", "style": "neutral"},
+      {"label": "Abandoned", "next": "ABANDONED", "style": "neutral"},
+      {"label": "Squatters", "next": "SQUATTERS", "style": "neutral"},
+      {"label": "Vacant Lot", "next": "VACANT_LOT", "style": "neutral"}
+    ]
+  },
+
+  "OWNER_OCCUPIED": {
+    "id": "OWNER_OCCUPIED",
+    "section": "Occupancy",
+    "text": "How long have you lived there?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "TENANT": {
+    "id": "TENANT",
+    "section": "Occupancy",
+    "text": "What's the monthly rent? Are they on a lease or a month-to-month?",
+    "hint": "It seems like they are good tenants",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "On a Lease", "next": "TENANT_LEASE", "style": "neutral"},
+      {"label": "Month-to-Month", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "TENANT_LEASE": {
+    "id": "TENANT_LEASE",
+    "section": "Occupancy",
+    "text": "When is it due?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "RELATIVE_FRIEND": {
+    "id": "RELATIVE_FRIEND",
+    "section": "Occupancy",
+    "text": "Are they paying any rent? IF SO — How much? Are they on a lease or a month-to-month?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "On a Lease", "next": "RELATIVE_LEASE", "style": "neutral"},
+      {"label": "Month-to-Month", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "RELATIVE_LEASE": {
+    "id": "RELATIVE_LEASE",
+    "section": "Occupancy",
+    "text": "When is it due?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "VACANT": {
+    "id": "VACANT",
+    "section": "Occupancy",
+    "text": "How long has it been vacant?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "ABANDONED": {
+    "id": "ABANDONED",
+    "section": "Occupancy",
+    "text": "I am sorry to hear that, could you please tell me a little bit more about it?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "SQUATTERS": {
+    "id": "SQUATTERS",
+    "section": "Occupancy",
+    "text": "I am sorry to hear that, could you please tell me a little bit more about it?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "VACANT_LOT": {
+    "id": "VACANT_LOT",
+    "section": "Occupancy",
+    "text": "Understood, has anything been built there before? Is it a residential or commercial lot? Do you know the Sq ft?",
+    "hint": "Option A- Does it have the services? Option B- What utilities does it have?",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "CONDITION", "style": "neutral"}
+    ]
+  },
+
+  "CONDITION": {
+    "id": "CONDITION",
+    "section": "Condition",
+    "text": "Can you tell me how the house looks on the inside, just in general? (Ok, perfect) When was the last time you did any major renovations, like the roof or the kitchen? One more thing, are there any other repairs or updates needed?",
+    "hint": "Kitchen, Bath, Floor, Roof",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Bad Shape", "next": "CONDITION_BAD", "style": "no"},
+      {"label": "Really Good Conditions", "next": "CONDITION_GOOD", "style": "yes"}
+    ]
+  },
+
+  "CONDITION_BAD": {
+    "id": "CONDITION_BAD",
+    "section": "Condition",
+    "text": "I appreciate you being upfront about your property's condition. Are you planning on fixing the property or would you prefer selling \"as-is\"?",
+    "hint": "If in BAD SHAPE",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "TIMEFRAME", "style": "neutral"}
+    ]
+  },
+
+  "CONDITION_GOOD": {
+    "id": "CONDITION_GOOD",
+    "section": "Condition",
+    "text": "Well, this sounds like a really good house! Why would you even consider selling?",
+    "hint": "If in REALLY GOOD CONDITIONS",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "TIMEFRAME", "style": "neutral"}
+    ]
+  },
+
+  "TIMEFRAME": {
+    "id": "TIMEFRAME",
+    "section": "Time Frame",
+    "text": "How soon can you sell?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "MOTIVATION", "style": "neutral"}
+    ]
+  },
+
+  "MOTIVATION": {
+    "id": "MOTIVATION",
+    "section": "Motivation",
+    "text": "We usually work with owners who want to avoid the hassle of a traditional sale because they value selling their property in \"as-is\" condition, without paying commissions or closing costs, and getting paid cash on their timeline. Is this something you would be interested in? Besides financial gain, why would you sell your property?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Foreclosure", "next": "MOTIV_FORECLOSURE", "style": "neutral"},
+      {"label": "Unwanted Rental Property", "next": "MOTIV_RENTAL", "style": "neutral"},
+      {"label": "Financial Distress / Life Events", "next": "MOTIV_FINANCIAL", "style": "neutral"},
+      {"label": "Need to Relocate", "next": "MOTIV_RELOCATE", "style": "neutral"},
+      {"label": "Inherited Unwanted Property", "next": "MOTIV_INHERITED", "style": "neutral"},
+      {"label": "Divorce", "next": "MOTIV_DIVORCE", "style": "neutral"},
+      {"label": "Avoid Paying Realtor Commissions", "next": "MOTIV_COMMISSIONS", "style": "neutral"},
+      {"label": "Little or No Equity / Title Issues", "next": "MOTIV_NO_EQUITY", "style": "neutral"}
+    ]
+  },
+
+  "MOTIV_FORECLOSURE": {
+    "id": "MOTIV_FORECLOSURE",
+    "section": "Motivation",
+    "text": "Sorry to hear that, we have worked with homeowners in the same situation.",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "ASKING_PRICE", "style": "neutral"}
+    ]
+  },
+
+  "MOTIV_RENTAL": {
+    "id": "MOTIV_RENTAL",
+    "section": "Motivation",
+    "text": "Could you please tell me a little bit more about it? (As I mentioned before) I am with a private investor who works with homeowners who value a quick and easy process to sell the property for cash. Are you considering listing the property or selling it as soon as possible?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sell ASAP", "next": "ASKING_PRICE", "style": "yes"},
+      {"label": "Listing", "next": "WANTS_LIST", "style": "no"}
+    ]
+  },
+
+  "MOTIV_FINANCIAL": {
+    "id": "MOTIV_FINANCIAL",
+    "section": "Motivation",
+    "text": "(As I mentioned before) I am with a private investor who works with homeowners who value a quick and easy process to sell the property for cash. Are you considering listing the property or selling it as soon as possible?",
+    "hint": "Financial Distress - Life Events",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sell ASAP", "next": "ASKING_PRICE", "style": "yes"},
+      {"label": "Listing", "next": "WANTS_LIST", "style": "no"}
+    ]
+  },
+
+  "MOTIV_RELOCATE": {
+    "id": "MOTIV_RELOCATE",
+    "section": "Motivation",
+    "text": "Sounds like moving will… USE INFO YOU HAVE Ex.- Be good for you to stop suffering with the hot summer! So, What is gonna happen next? (Try to look for more info) Ex.- Do you already have a place? If the info is very shallow: Why would you want to relocate? (As I mentioned before) I am with a private investor who works with homeowners who value a quick and easy process to sell the property for cash. Are you considering listing the property or selling it as soon as possible?",
+    "hint": "Use the info you have. Try to look for more info. If shallow, ask: Why would you want to relocate?",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sell ASAP", "next": "ASKING_PRICE", "style": "yes"},
+      {"label": "Listing", "next": "WANTS_LIST", "style": "no"}
+    ]
+  },
+
+  "MOTIV_INHERITED": {
+    "id": "MOTIV_INHERITED",
+    "section": "Motivation",
+    "text": "Are you planning on keeping the property in the family, listing, or selling it as soon as possible?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sell ASAP", "next": "ASKING_PRICE", "style": "yes"},
+      {"label": "Keeping / Listing", "next": "WANTS_LIST", "style": "no"}
+    ]
+  },
+
+  "MOTIV_DIVORCE": {
+    "id": "MOTIV_DIVORCE",
+    "section": "Motivation",
+    "text": "Are you planning on keeping the property, or selling it as soon as possible?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Sell ASAP", "next": "ASKING_PRICE", "style": "yes"},
+      {"label": "Keeping", "next": "END_NI", "style": "no"}
+    ]
+  },
+
+  "MOTIV_COMMISSIONS": {
+    "id": "MOTIV_COMMISSIONS",
+    "section": "Motivation",
+    "text": "Have you listed this property in the past? How soon do you need to sell your property?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "ASKING_PRICE", "style": "neutral"}
+    ]
+  },
+
+  "MOTIV_NO_EQUITY": {
+    "id": "MOTIV_NO_EQUITY",
+    "section": "Motivation",
+    "text": "I appreciate you sharing this information with me, we have worked with homeowners in the same situation.",
+    "hint": "Go to pricing: Do you already have a price in mind?",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Continue", "next": "ASKING_PRICE", "style": "neutral"}
+    ]
+  },
+
+  "ASKING_PRICE": {
+    "id": "ASKING_PRICE",
+    "section": "Asking Price",
+    "text": "If we paid all closing costs, bought the home in as-is condition, there were no commissions, and could close in your timeline, what is the absolute best you would do? Do you have a price in mind?",
+    "hint": "Option A: If we paid all closing costs, bought the home in as-is condition, there were no commissions, and could close in your timeline, what is the absolute best you would do? Option B: Do you have a price in mind?",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Price is Negotiable", "next": "PRICE_NEGOTIABLE", "style": "yes"},
+      {"label": "Asks for Market Price or More", "next": "PRICE_MARKET", "style": "neutral"},
+      {"label": "Price Too High", "next": "PRICE_HIGH", "style": "no"}
+    ]
+  },
+
+  "PRICE_NEGOTIABLE": {
+    "id": "PRICE_NEGOTIABLE",
+    "section": "Asking Price",
+    "text": "And, what would be the lowest?",
+    "hint": "If they ask below market price, go to transition",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Below Market → Transition", "next": "TRANSITION", "style": "yes"},
+      {"label": "Still Too High", "next": "PRICE_HIGH", "style": "no"}
+    ]
+  },
+
+  "PRICE_MARKET": {
+    "id": "PRICE_MARKET",
+    "section": "Asking Price",
+    "text": "About price, Is it negotiable?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Yes", "next": "PRICE_NEGOTIABLE", "style": "yes"},
+      {"label": "No", "next": "WANTS_LIST", "style": "no"}
+    ]
+  },
+
+  "PRICE_HIGH": {
+    "id": "PRICE_HIGH",
+    "section": "Asking Price",
+    "text": "Ohh I see!! We usually don't buy houses at market price for cash. How about listing your property?",
+    "hint": "IF THE PRICE IS TOO HIGH!",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Wants to List", "next": "WANTS_LIST", "style": "neutral"},
+      {"label": "Reconsiders", "next": "TRANSITION", "style": "yes"}
+    ]
+  },
+
+  "WANTS_LIST": {
+    "id": "WANTS_LIST",
+    "section": "Asking Price",
+    "text": "We can help you with that. Do you already have a realtor that you would LOVE to work with?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "No Realtor", "next": "TRANSITION", "style": "no"},
+      {"label": "Has a Realtor", "next": "CONFIRM_REALTOR", "style": "yes"}
+    ]
+  },
+
+  "CONFIRM_REALTOR": {
+    "id": "CONFIRM_REALTOR",
+    "section": "Asking Price",
+    "text": "OK, and you are definitely deciding to work with him/her, Right?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Yes, working with Realtor", "next": "FOLLOWUP", "style": "yes"},
+      {"label": "Taking Us!", "next": "TRANSITION", "style": "no"}
+    ]
+  },
+
+  "FOLLOWUP": {
+    "id": "FOLLOWUP",
+    "section": "Asking Price",
+    "text": "Great! Thank you for your time, Is it ok if I follow up in a couple of weeks with you to see how is going?",
+    "hint": "",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Yes", "next": "END_CB", "style": "yes"}
+    ]
+  },
+
+  "TRANSITION": {
+    "id": "TRANSITION",
+    "section": "Transition",
+    "text": "{name} I appreciate you taking the time. I will have our homebuying specialist reach out to you shortly. Sound good? Awesome! When would be the best time for one of them to call you? Tomorrow or the day after? Morning or afternoon? By any chance, do you have an email address so we can send you a confirmation for the phone appointment? Thank you for all this information. We will be in touch!",
+    "hint": "LOOK FOR CALENDAR. MORNING- 9 am or 11 am. AFTERNOON- 3 pm or 5 pm. Give options for time if the Homeowner doesn't tell you.",
+    "terminal": false,
+    "terminalType": null,
+    "options": [
+      {"label": "Done", "next": "END_SET", "style": "yes"}
+    ]
+  },
+
+  "END_SET": {
+    "id": "END_SET",
+    "section": "SET",
+    "text": "",
+    "hint": "",
+    "terminal": true,
+    "terminalType": "set",
+    "options": []
+  },
+
+  "END_NI": {
+    "id": "END_NI",
+    "section": "NI",
+    "text": "",
+    "hint": "",
+    "terminal": true,
+    "terminalType": "ni",
+    "options": []
+  },
+
+  "END_CB": {
+    "id": "END_CB",
+    "section": "CB",
+    "text": "",
+    "hint": "",
+    "terminal": true,
+    "terminalType": "cb",
+    "options": []
+  }
+}

@@ -53,6 +53,20 @@ def _clean(text: str) -> str:
     return text.strip()
 
 
+def _split_hint(text: str) -> tuple[str, str]:
+    """
+    Separa el hint del texto principal.
+    Formato soportado: [HINT: texto del hint]
+    Retorna (texto_limpio, hint)
+    """
+    match = re.search(r'\[HINT:\s*(.*?)\]', text, re.IGNORECASE | re.DOTALL)
+    if match:
+        hint = match.group(1).strip()
+        clean = re.sub(r'\[HINT:.*?\]', '', text, flags=re.IGNORECASE | re.DOTALL).strip()
+        return clean, hint
+    return text, ""
+
+
 def _slug(text: str) -> str:
     """Genera un ID limpio en mayúsculas desde el texto del nodo."""
     s = re.sub(r"[^a-zA-Z0-9 ]", "", text).strip().upper()
@@ -219,13 +233,14 @@ def parse_drawio(xml_content: str) -> dict:
         section = v["label"] if nt in ("start",) else v["label"]
 
         # Para message/decision el texto va en "text", para end/start va vacío
-        text = v["label"] if nt in ("message", "decision") else ""
+        raw_text = v["label"] if nt in ("message", "decision") else ""
+        text, hint = _split_hint(raw_text) if raw_text else ("", "")
 
         script[brick_id] = {
             "id":           brick_id,
             "section":      section,
             "text":         text,
-            "hint":         "",
+            "hint":         hint,
             "terminal":     terminal,
             "terminalType": term_type,
             "options":      options_map[raw_id] if not terminal else [],

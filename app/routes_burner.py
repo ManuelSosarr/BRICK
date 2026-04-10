@@ -3,10 +3,26 @@ import time as time_module
 import sqlite3
 import csv
 import io
+import subprocess
+import logging
 from datetime import datetime, date
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from app.vici_connector import get_connection
+
+logger = logging.getLogger(__name__)
+
+VICI_HOST = "root@144.126.146.250"
+VICI_KEY  = r"C:\Users\sosai\.ssh\vicidial_key"
+AUTODIAL  = "/usr/share/astguiclient/AST_VDauto_dial.pl"
+
+def _ssh(remote_cmd: str) -> tuple[int, str, str]:
+    result = subprocess.run(
+        ["ssh", "-i", VICI_KEY, "-o", "StrictHostKeyChecking=no",
+         "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", VICI_HOST, remote_cmd],
+        capture_output=True, text=True, timeout=15
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 try:
     import pytz
@@ -150,7 +166,7 @@ def _process_hopper(campaign_id: str):
             cur.execute("""
                 UPDATE vicidial_list SET called_since_last_reset='N'
                 WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-                AND status IN ('NA','AB') AND called_count < 5
+                AND status = 'PWORK'
                 AND last_local_call_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
             """, (campaign_id,))
             conn.commit()
@@ -245,9 +261,9 @@ def burner_weekly(tenant_id: str = Query(...)):
         total = cur.fetchone()["total"]
         cur.execute("SELECT COUNT(*) as dialed FROM vicidial_log WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)", (campaign_id,))
         dialed = cur.fetchone()["dialed"]
-        cur.execute("SELECT COUNT(*) as dialable FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('NA','AB') AND called_count < 5", (campaign_id,))
+        cur.execute("SELECT COUNT(*) as dialable FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='PWORK'", (campaign_id,))
         dialable = cur.fetchone()["dialable"]
-        cur.execute("SELECT COUNT(*) as excluded FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('DROP','PDROP','AA','DNCL','DNC')", (campaign_id,))
+        cur.execute("SELECT COUNT(*) as excluded FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='EXCLUD'", (campaign_id,))
         excluded = cur.fetchone()["excluded"]
         cur.execute("SELECT COUNT(*) as answered FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='AL'", (campaign_id,))
         answered = cur.fetchone()["answered"]
@@ -330,9 +346,29 @@ def burner_toggle(payload: dict):
         conn.commit()
         affected = cur.rowcount
         conn.close()
-        return {"ok": affected > 0, "response": new_status, "affected": affected}
     except Exception as e:
         return {"ok": False, "response": f"DB ERROR: {str(e)}"}
+
+    # ── SSH: start/stop AST_VDauto_dial on ViciDial server ───────────────────
+    ssh_result = {"ok": False, "msg": "not attempted"}
+    try:
+        if action == "START":
+            rc, out, err = _ssh(
+                f"nohup {AUTODIAL} --campaign={campaign_id} --loop > /dev/null 2>&1 &"
+            )
+            ssh_result = {"ok": rc == 0, "msg": err or out or "launched"}
+        else:
+            rc, out, err = _ssh(
+                f"pkill -f '{AUTODIAL} --campaign={campaign_id}'; echo done"
+            )
+            ssh_result = {"ok": True, "msg": out or "killed"}
+    except subprocess.TimeoutExpired:
+        ssh_result = {"ok": False, "msg": "SSH timeout"}
+    except Exception as e:
+        ssh_result = {"ok": False, "msg": str(e)}
+
+    logger.info("burner toggle %s campaign=%s ssh=%s", action, campaign_id, ssh_result)
+    return {"ok": affected > 0, "response": new_status, "affected": affected, "ssh": ssh_result}
 
 
 @router.post("/push/preview")
@@ -353,9 +389,9 @@ def burner_push_preview(payload: dict):
             return {"error": f"Destination campaign '{destination}' not found"}
         cur.execute("SELECT COUNT(*) as cnt FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='AL'", (source,))
         al = cur.fetchone()["cnt"]
-        cur.execute("SELECT COUNT(*) as cnt FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('NA','AB') AND called_count < 5", (source,))
+        cur.execute("SELECT COUNT(*) as cnt FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='PWORK'", (source,))
         possible = cur.fetchone()["cnt"]
-        cur.execute("SELECT COUNT(*) as cnt FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('DROP','PDROP','AA','DNCL','DNC')", (source,))
+        cur.execute("SELECT COUNT(*) as cnt FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='EXCLUD'", (source,))
         excluded = cur.fetchone()["cnt"]
         cur.close()
         conn.close()
@@ -394,7 +430,7 @@ def burner_push(payload: dict):
             SET status='NEW', called_since_last_reset='N', called_count=0,
                 list_id=%s, campaign_id=%s
             WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-            AND (status='AL' OR (status IN ('NA','AB') AND called_count < 5))
+            AND status IN ('AL', 'PWORK')
         """, (dest_list_id, destination, source))
         pushed = cur.rowcount
         conn.commit()
@@ -460,15 +496,15 @@ def burner_export(tenant_id: str = Query(...)):
             writer.writerow(row_to_csv(x))
 
         writer.writerow([])
-        writer.writerow([f"=== POSSIBLE WORKING (NA/AB < 5 attempts) — {campaign_id} ==="])
+        writer.writerow([f"=== POSSIBLE WORKING (PWORK) — {campaign_id} ==="])
         writer.writerow(headers)
-        for x in [x for x in leads if x["status"] in ("NA", "AB") and x["called_count"] < 5]:
+        for x in [x for x in leads if x["status"] == "PWORK"]:
             writer.writerow(row_to_csv(x))
 
         writer.writerow([])
-        writer.writerow([f"=== EXCLUDED (DROP/PDROP/AA/DNCL/DNC) — {campaign_id} ==="])
+        writer.writerow([f"=== EXCLUDED (EXCLUD) — {campaign_id} ==="])
         writer.writerow(headers)
-        for x in [x for x in leads if x["status"] in ("DROP", "PDROP", "AA", "DNCL", "DNC")]:
+        for x in [x for x in leads if x["status"] == "EXCLUD"]:
             writer.writerow(row_to_csv(x))
 
         output.seek(0)
