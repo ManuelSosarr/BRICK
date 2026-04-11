@@ -17,6 +17,10 @@ Claude Code crea un **git worktree** por cada chat nuevo (branch `claude/nombre`
 | BRICK backend (8000) + frontend | `/Users/manny.sosa/vicidial-app/` | — (solo en ASUS) |
 | BRICK frontend | `/Users/manny.sosa/Documents/dialflow/frontend` | `ManuelSosarr/BRICK-frontend` |
 
+### REGLA DE ORO — Comandos en ASUS
+Cada vez que se necesite correr un comando en ASUS, SIEMPRE escribir explícitamente:
+**"Corre esto en ASUS PowerShell:"** antes del bloque de código. Sin excepción.
+
 ### Cómo limpiar worktrees muertos (Mac Terminal)
 ```bash
 cd /Users/manny.sosa/Documents/dialflow
@@ -537,6 +541,7 @@ conn.close()
 
 | # | Feature | Prioridad | Notas |
 |---|---|---|---|
+| 0 | **BossBuy dropdown campañas** — solo muestra IBFEO, faltan las demás campañas del tenant | Alta | Verificar en **ASUS PowerShell**: `docker exec -it dialflow_postgres psql -U dialflow -d dialflow -c "SELECT tenant_id, campaign_ids FROM vicidial_configs;"` — el Sync Wizard debe haber guardado todas las campañas ahí |
 | 1 | Data Burner — verificar números BossBuy/IBFEO | Alta | Verificar que Elegibles y AL muestren correctamente tras el fix de vicidial_log |
 | 2 | Script Library — cargar REI script | Media | Importar `rei_script.json` via UI → asignar a campaña MUH |
 | 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
