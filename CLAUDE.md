@@ -1,5 +1,5 @@
 # BRICK — CLAUDE.md
-## Última actualización: 10 de Abril, 2026 | Referencia: BRICK_Handover_V23
+## Última actualización: 11 de Abril, 2026 | Referencia: BRICK_Handover_V24
 
 ---
 
@@ -106,7 +106,7 @@ Archivo: `C:\Users\sosai\BRICK\BRICK-watchdog.ps1`
 3. **Hangup** → usar agc/api.php como primario. MySQL directo deja al agente en DEAD
 4. **CORS** → `allow_credentials=False` — True + wildcard es inválido por spec
 5. **Túnel SSH** → siempre en ASUS, dos terminales: una bloqueada (túnel), una libre (comandos)
-6. **Start/Stop y Billing** → SOLO visibles para superadmin (isMaster)
+6. **Start/Stop** → visibles para TODOS los tenants. **Billing y Reset View** → SOLO superadmin (isMaster)
 7. **Routing** → TODO agente en 8001. Admin/datos en 8000
 8. **V19 Standard** → toda operación destructiva en masa DEBE tener `/preview` antes del ejecutor
 9. **Sin referencias al dialer** → NUNCA mencionar el nombre del dialer en UI, copy, o labels del frontend. Usar "backend", "sistema", "dialer" genérico
@@ -255,7 +255,17 @@ GET    /api/burner/minutes?tenant_id=X         → minutos facturados (solo isMa
 GET    /api/burner/lists?campaign_id=X         → listas activas de una campaña (sin restricción de tenant)
 POST   /api/burner/push/preview                → preview push (source_tenant_id + destination_campaign_id)
 POST   /api/burner/push                        → ejecuta push {tenant_id, dest_list_id}
-GET    /api/burner/export?tenant_id=X          → CSV (AL / PWORK / EXCLUD)
+GET    /api/burner/export?tenant_id=X          → CSV (3 secciones: AL, Elegibles, Excluidos) + setea csv_downloaded flag
+GET    /api/burner/cycle-status?tenant_id=X   → {list_complete, csv_downloaded, push_done}
+POST   /api/burner/reset                       → verifica 3 flags, DELETE leads, limpia flags
+
+# Script Library (routes_admin.py)
+GET    /api/admin/scripts/library              → lista scripts con assignments
+POST   /api/admin/scripts/library/import       → upload file (drawio/xml/json/pdf/jpg/png)
+GET    /api/admin/scripts/library/{id}/content → sirve bytes raw (PDF/imagen)
+PUT    /api/admin/scripts/library/{id}/assign  → asigna lista de campaign_ids
+DELETE /api/admin/scripts/library/{id}         → elimina script + assignments
+GET    /api/admin/vici/campaigns/all           → todas las campañas del dialer (para assignment UI)
 
 # Admin / Módulos
 POST   /api/upload/sync                        → upload leads → dialer
@@ -527,13 +537,14 @@ conn.close()
 
 | # | Feature | Prioridad | Notas |
 |---|---|---|---|
-| 1 | Push to CRM (Zapier → ResImpli) | Hold | URL Zapier no configurada — esperando pago |
-| 2 | County Link | Media | Endpoint existe, verificar con datos reales en PropertyMaster |
+| 1 | Data Burner — verificar números BossBuy/IBFEO | Alta | Verificar que Elegibles y AL muestren correctamente tras el fix de vicidial_log |
+| 2 | Script Library — cargar REI script | Media | Importar `rei_script.json` via UI → asignar a campaña MUH |
 | 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
-| 4 | GDrive upload post-sync | Pendiente | Necesita Service Account JSON de Google Cloud en ASUS |
-| 5 | Email notification post-sync | Pendiente | Necesita Gmail App Password en ASUS |
-| 6 | Script Editor — draw.io import | Pendiente | Importar XML de draw.io → guardar → asignar a campaña. SIN lógica de disposiciones |
-| 7 | Dedicated server + static IP | Q2 Hold | Migración de ASUS cuando se afine |
+| 4 | Push to CRM (Zapier → ResImpli) | Hold | URL Zapier no configurada — esperando pago. Oportunidad |
+| 5 | GDrive upload post-sync | Hold | Necesita Service Account JSON Google Cloud en ASUS. Oportunidad |
+| 6 | Email notification post-sync | Hold | Necesita Gmail App Password en ASUS. Oportunidad |
+| 7 | County Link | Media | Endpoint existe, verificar con datos reales en PropertyMaster |
+| 8 | Dedicated server + static IP | Q2 Hold | Migración de ASUS cuando se afine |
 
 ### Variables de entorno pendientes en ASUS (para GDrive + Email)
 ```powershell
@@ -565,6 +576,35 @@ Flujo decidido: **draw.io → importar XML → guardar → asignar a campaña**.
 - `app/routes_admin.py` — `POST /api/admin/scripts/{campaign_id}/import-drawio`
 - `frontend/src/pages/admin/ScriptFlowEditor.tsx` — botón "Importar .drawio"
 - `frontend/src/pages/Agent.tsx` — soporta formato A (flat dict draw.io) y formato B (ReactFlow JSON)
+
+### COMPLETADO en sesión V24 (11 Abril 2026)
+
+**ngrok / acceso externo:**
+- ✅ `client.ts` hardcodea `/auth-api` y `/brick-api` — sin env vars que puedan sobreescribir
+- ✅ `.env.development` y `.env.production` limpiados (ya no contienen URLs absolutas de localhost)
+- ✅ `vite.config.ts` — proxy Vite: `/auth-api` → 8001, `/brick-api` → 8000 (server-side, transparente para ngrok)
+- ✅ `BRICK.ps1` — agrega `npm install` antes de `npm run dev` para garantizar deps actualizadas
+
+**BRICK-auth (8001):**
+- ✅ `requirements.txt` — agregado `pymysql==1.1.1` (faltaba, causaba crash en arranque)
+- ✅ `routers/agent.py` — renombrado `get_db()` local a `_get_vici_conn()` para evitar naming collision con `from database import get_db`
+- ✅ `GET /api/agent/campaigns` — nuevo endpoint: lee `vicidial_configs.campaign_ids` del tenant del JWT. Agent dropdown ahora usa campañas reales por tenant (no hardcodeadas)
+
+**Script Library (ScriptFlowEditor):**
+- ✅ `ScriptFlowEditor.tsx` — reescrito completo como gestión de biblioteca (NO editor de nodos). Tabla: Nombre | Tipo | Campañas | Fecha. Import modal (drag-drop), assignment modal (checkboxes por campaña), delete
+- ✅ `routes_admin.py` — tablas SQLite `scripts` + `script_assignments`. Endpoints: import, list, content, assign, delete, campaigns/all. Contenido: JSON/drawio en texto, PDF/JPG en base64
+
+**Data Burner — ciclo completo:**
+- ✅ `_process_hopper` — detecta `dialable_leads=0` + sin NEW/PWORK → setea `list_complete=true`
+- ✅ `/api/burner/weekly` — `answered` (AL) ahora viene de `vicidial_log` (leads AL son pusheados fuera de la lista, no se encontraban con query a `vicidial_list`)
+- ✅ `/api/burner/weekly` — `dialable` cuenta todos los leads NOT IN (EXCLUD, AL, DNC, DNCC)
+- ✅ `/api/burner/export` — incluye `source_id`, exporta 3 secciones con conteo, setea `csv_downloaded=true`
+- ✅ `/api/burner/push` — setea `push_done=true` al completar
+- ✅ `GET /api/burner/cycle-status` — expone los 3 flags al frontend
+- ✅ `POST /api/burner/reset` — verifica 3 flags, bloquea con mensaje si falta alguno, DELETE leads, limpia todos los flags
+- ✅ `DataBurner.tsx` — CyclePill pills visuales (✓ verde / ○ gris), botón Reset Cycle (naranja si todo listo), polling cycle-status cada 15s
+- ✅ `DataBurner.tsx` — START/STOP visibles para TODOS los tenants (antes solo isMaster)
+- ✅ `DataBurner.tsx` — botón "↺ Reset View" solo para superadmin: pone a 0 KPIs y stats visualmente, sin API, polling restaura automáticamente
 
 ### COMPLETADO en sesión V23 (10 Abril 2026)
 - ✅ Statuses PWORK + EXCLUD — reemplazan NA/AB/DROP/PDROP/AA en todos los endpoints del Burner
