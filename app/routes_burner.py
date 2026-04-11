@@ -261,9 +261,9 @@ def burner_weekly(tenant_id: str = Query(...)):
         total = cur.fetchone()["total"]
         cur.execute("SELECT COUNT(*) as dialed FROM vicidial_log WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)", (campaign_id,))
         dialed = cur.fetchone()["dialed"]
-        cur.execute("SELECT COUNT(*) as dialable FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='PWORK'", (campaign_id,))
+        cur.execute("SELECT COUNT(*) as dialable FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status NOT IN ('EXCLUD','AL','DNC','DNCC')", (campaign_id,))
         dialable = cur.fetchone()["dialable"]
-        cur.execute("SELECT COUNT(*) as excluded FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='EXCLUD'", (campaign_id,))
+        cur.execute("SELECT COUNT(*) as excluded FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('EXCLUD','DNC','DNCC')", (campaign_id,))
         excluded = cur.fetchone()["excluded"]
         cur.execute("SELECT COUNT(*) as answered FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='AL'", (campaign_id,))
         answered = cur.fetchone()["answered"]
