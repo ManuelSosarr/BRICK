@@ -1,9 +1,12 @@
 import sqlite3
 import datetime as dt
 import json
+import uuid as _uuid
+import base64
 import requests as http
 import psycopg2
-from fastapi import APIRouter, Header, UploadFile, File, Form
+from fastapi import APIRouter, Header, UploadFile, File, Form, HTTPException
+from fastapi.responses import Response
 from typing import Optional
 from app.drawio_parser import parse_drawio
 
@@ -304,12 +307,201 @@ def admin_sync_tenant(payload: dict, authorization: Optional[str] = Header(None)
 
 # ─── Scripts — se quedan en SQLite (son config de BRICK, no de auth) ─────────
 
+def _init_script_library(cur):
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS scripts (
+            id         TEXT PRIMARY KEY,
+            name       TEXT NOT NULL,
+            file_type  TEXT NOT NULL DEFAULT 'drawio',
+            content    TEXT NOT NULL DEFAULT '',
+            created_at TEXT,
+            updated_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS script_assignments (
+            script_id   TEXT NOT NULL,
+            campaign_id TEXT NOT NULL,
+            PRIMARY KEY (script_id, campaign_id)
+        )
+    """)
+
+
+# ── List all scripts in library ───────────────────────────────────────────────
+@router.get("/scripts/library")
+def admin_list_scripts():
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_script_library(cur)
+    conn.commit()
+    cur.execute("SELECT id, name, file_type, created_at, updated_at FROM scripts ORDER BY created_at DESC")
+    rows = cur.fetchall()
+    result = []
+    for (sid, name, file_type, created_at, updated_at) in rows:
+        cur.execute("SELECT campaign_id FROM script_assignments WHERE script_id=?", (sid,))
+        campaigns = [r[0] for r in cur.fetchall()]
+        result.append({
+            "id":         sid,
+            "name":       name,
+            "file_type":  file_type,
+            "campaigns":  campaigns,
+            "created_at": created_at,
+            "updated_at": updated_at,
+        })
+    conn.close()
+    return result
+
+
+# ── Import a new script (drawio/xml/pdf/jpg/png) ──────────────────────────────
+@router.post("/scripts/library/import")
+async def admin_import_script(
+    file: UploadFile = File(...),
+    name: str = Form(...),
+):
+    content_bytes = await file.read()
+    filename = (file.filename or "").lower()
+
+    if filename.endswith(".drawio") or filename.endswith(".xml"):
+        try:
+            xml_str = content_bytes.decode("utf-8")
+        except Exception:
+            return {"ok": False, "error": "Archivo no es UTF-8 válido"}
+        try:
+            script_dict = parse_drawio(xml_str)
+        except ValueError as e:
+            return {"ok": False, "error": str(e)}
+        content   = json.dumps(script_dict, ensure_ascii=False)
+        file_type = "drawio"
+    elif filename.endswith(".pdf"):
+        content   = base64.b64encode(content_bytes).decode("utf-8")
+        file_type = "pdf"
+    elif filename.endswith(".jpg") or filename.endswith(".jpeg"):
+        content   = base64.b64encode(content_bytes).decode("utf-8")
+        file_type = "jpg"
+    elif filename.endswith(".png"):
+        content   = base64.b64encode(content_bytes).decode("utf-8")
+        file_type = "png"
+    else:
+        return {"ok": False, "error": "Formato no soportado. Use .drawio, .xml, .pdf, .jpg o .png"}
+
+    script_id = str(_uuid.uuid4())
+    now       = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_script_library(cur)
+    cur.execute(
+        "INSERT INTO scripts (id, name, file_type, content, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (script_id, name.strip(), file_type, content, now, now),
+    )
+    conn.commit()
+    conn.close()
+    return {"ok": True, "id": script_id, "name": name.strip(), "file_type": file_type}
+
+
+# ── Serve raw bytes for PDF/image scripts ─────────────────────────────────────
+@router.get("/scripts/library/{script_id}/content")
+def admin_script_raw_content(script_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_script_library(cur)
+    cur.execute("SELECT file_type, content FROM scripts WHERE id=?", (script_id,))
+    row = cur.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Script no encontrado")
+    file_type, content = row
+    media = {
+        "pdf": "application/pdf",
+        "jpg": "image/jpeg",
+        "png": "image/png",
+    }.get(file_type, "application/octet-stream")
+    return Response(content=base64.b64decode(content), media_type=media)
+
+
+# ── Assign / update campaign assignments ──────────────────────────────────────
+@router.put("/scripts/library/{script_id}/assign")
+def admin_assign_script(script_id: str, payload: dict):
+    campaign_ids = [str(c).strip().upper() for c in payload.get("campaign_ids", []) if c]
+    now  = dt.datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_script_library(cur)
+    cur.execute("DELETE FROM script_assignments WHERE script_id=?", (script_id,))
+    for cid in campaign_ids:
+        cur.execute(
+            "INSERT OR IGNORE INTO script_assignments (script_id, campaign_id) VALUES (?,?)",
+            (script_id, cid),
+        )
+    cur.execute("UPDATE scripts SET updated_at=? WHERE id=?", (now, script_id))
+    conn.commit()
+    conn.close()
+    return {"ok": True, "script_id": script_id, "campaigns": campaign_ids}
+
+
+# ── Delete a script and its assignments ───────────────────────────────────────
+@router.delete("/scripts/library/{script_id}")
+def admin_delete_script(script_id: str):
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_script_library(cur)
+    cur.execute("DELETE FROM script_assignments WHERE script_id=?", (script_id,))
+    cur.execute("DELETE FROM scripts WHERE id=?", (script_id,))
+    conn.commit()
+    deleted = cur.rowcount
+    conn.close()
+    return {"ok": deleted > 0}
+
+
+# ── All ViciDial campaigns (for assignment UI) ────────────────────────────────
+@router.get("/vici/campaigns/all")
+def admin_vici_all_campaigns():
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
+        cur.execute(
+            "SELECT campaign_id, campaign_name, active FROM vicidial_campaigns ORDER BY campaign_name"
+        )
+        rows = cur.fetchall()
+        cur.close(); conn.close()
+    except Exception as e:
+        return {"error": str(e), "campaigns": []}
+    return {"campaigns": [
+        {"campaign_id": c["campaign_id"], "campaign_name": c["campaign_name"], "active": c["active"] == "Y"}
+        for c in rows
+    ]}
+
+
 @router.get("/scripts/{campaign_id}")
 def admin_get_script(campaign_id: str):
     conn = sqlite3.connect(DB_PATH)
     cur  = conn.cursor()
+    _init_script_library(cur)
     _init_scripts(cur)
     conn.commit()
+
+    # Check new library — most recently updated script assigned to this campaign
+    cur.execute("""
+        SELECT s.id, s.name, s.file_type, s.content
+        FROM   scripts s
+        JOIN   script_assignments sa ON sa.script_id = s.id
+        WHERE  sa.campaign_id = ?
+        ORDER  BY s.updated_at DESC
+        LIMIT  1
+    """, (campaign_id.upper(),))
+    row = cur.fetchone()
+    if row:
+        sid, name, file_type, content = row
+        conn.close()
+        if file_type == "drawio":
+            return {"campaign_id": campaign_id.upper(), "script": content,
+                    "script_id": sid, "script_name": name, "file_type": "drawio"}
+        else:
+            return {"campaign_id": campaign_id.upper(), "script": None,
+                    "script_id": sid, "script_name": name, "file_type": file_type,
+                    "content_url": f"/api/admin/scripts/library/{sid}/content"}
+
+    # Fallback: old campaign_scripts table
     cur.execute(
         "SELECT script, updated_at FROM campaign_scripts WHERE campaign_id=?",
         (campaign_id.upper(),),
@@ -317,8 +509,9 @@ def admin_get_script(campaign_id: str):
     row = cur.fetchone()
     conn.close()
     if row:
-        return {"campaign_id": campaign_id.upper(), "script": row[0], "updated_at": row[1]}
-    return {"campaign_id": campaign_id.upper(), "script": "", "updated_at": None}
+        return {"campaign_id": campaign_id.upper(), "script": row[0],
+                "updated_at": row[1], "file_type": "drawio"}
+    return {"campaign_id": campaign_id.upper(), "script": "", "updated_at": None, "file_type": "drawio"}
 
 
 @router.put("/scripts/{campaign_id}")
