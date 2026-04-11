@@ -153,6 +153,7 @@ def _process_hopper(campaign_id: str):
             conn.commit()
             conn.close()
             set_burner_config(campaign_id, "burned_complete", "true")
+            set_burner_config(campaign_id, "list_complete", "true")
             return
 
     conn = get_connection()
@@ -163,13 +164,25 @@ def _process_hopper(campaign_id: str):
         cur.execute("SELECT dialable_leads FROM vicidial_campaign_stats WHERE campaign_id=%s", (campaign_id,))
         stats = cur.fetchone()
         if stats and stats["dialable_leads"] == 0:
+            # Check if any NEW or PWORK leads remain
             cur.execute("""
-                UPDATE vicidial_list SET called_since_last_reset='N'
+                SELECT COUNT(*) as remaining FROM vicidial_list
                 WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-                AND status = 'PWORK'
-                AND last_local_call_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                AND status IN ('NEW', 'PWORK')
             """, (campaign_id,))
-            conn.commit()
+            remaining = cur.fetchone()["remaining"]
+            if remaining == 0:
+                # All leads burned through — mark list complete
+                set_burner_config(campaign_id, "list_complete", "true")
+            else:
+                # Reset PWORK leads so dialer can retry them
+                cur.execute("""
+                    UPDATE vicidial_list SET called_since_last_reset='N'
+                    WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+                    AND status = 'PWORK'
+                    AND last_local_call_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                """, (campaign_id,))
+                conn.commit()
     cur.close()
     conn.close()
 
@@ -257,16 +270,46 @@ def burner_weekly(tenant_id: str = Query(...)):
     try:
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
-        cur.execute("SELECT COUNT(*) as total FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)", (campaign_id,))
+
+        # Total leads in campaign lists
+        cur.execute("""
+            SELECT COUNT(*) as total FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+        """, (campaign_id,))
         total = cur.fetchone()["total"]
-        cur.execute("SELECT COUNT(*) as dialed FROM vicidial_log WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)", (campaign_id,))
+
+        # Calls made in last 7 days (from call log)
+        cur.execute("""
+            SELECT COUNT(*) as dialed FROM vicidial_log
+            WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        """, (campaign_id,))
         dialed = cur.fetchone()["dialed"]
-        cur.execute("SELECT COUNT(*) as dialable FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status NOT IN ('EXCLUD','AL','DNC','DNCC')", (campaign_id,))
+
+        # Elegibles: all leads NOT in a terminal/excluded status
+        cur.execute("""
+            SELECT COUNT(*) as dialable FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+            AND status NOT IN ('EXCLUD','AL','DNC','DNCC')
+        """, (campaign_id,))
         dialable = cur.fetchone()["dialable"]
-        cur.execute("SELECT COUNT(*) as excluded FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status IN ('EXCLUD','DNC','DNCC')", (campaign_id,))
+
+        # Excluidos: all excluded statuses
+        cur.execute("""
+            SELECT COUNT(*) as excluded FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+            AND status IN ('EXCLUD','DNC','DNCC')
+        """, (campaign_id,))
         excluded = cur.fetchone()["excluded"]
-        cur.execute("SELECT COUNT(*) as answered FROM vicidial_list WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s) AND status='AL'", (campaign_id,))
+
+        # Contestaron (AL): count from vicidial_log — AL leads may have been pushed out of the list
+        cur.execute("""
+            SELECT COUNT(DISTINCT lead_id) as answered FROM vicidial_log
+            WHERE campaign_id=%s
+            AND call_date >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+            AND status='AL'
+        """, (campaign_id,))
         answered = cur.fetchone()["answered"]
+
         conn.close()
         return {"total": total, "dialed": dialed, "dialable": dialable, "excluded": excluded, "answered": answered}
     except Exception as e:
@@ -455,6 +498,8 @@ def burner_push(payload: dict):
         conn.commit()
         cur.close()
         conn.close()
+        # Mark push_done flag
+        set_burner_config(source, "push_done", "true")
         return {"pushed": pushed, "source": source, "destination": dest_campaign, "dest_list_id": dest_list_id}
     except Exception as e:
         return {"error": str(e)}
@@ -466,15 +511,17 @@ def burner_export(tenant_id: str = Query(...)):
     if not campaign_id:
         return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
     try:
-        # ── 1. Leads from ViciDial MySQL ──────────────────────────────────────
+        # ── 1. Leads from ViciDial MySQL — all statuses ───────────────────────
         conn = get_connection()
         cur = conn.cursor(dictionary=True)
         cur.execute("""
-            SELECT first_name, last_name, phone_number, address1, city, state,
-                   postal_code, status, called_count, last_local_call_time
-            FROM vicidial_list
-            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-            ORDER BY status
+            SELECT vl.first_name, vl.last_name, vl.phone_number, vl.address1,
+                   vl.city, vl.state, vl.postal_code, vl.status,
+                   vl.called_count, vl.last_local_call_time,
+                   vl.source_id
+            FROM vicidial_list vl
+            WHERE vl.list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+            ORDER BY vl.status
         """, (campaign_id,))
         leads = cur.fetchall()
         conn.close()
@@ -501,32 +548,44 @@ def burner_export(tenant_id: str = Query(...)):
                 x["first_name"], x["last_name"], phone,
                 x["address1"], x["city"], x["state"], x["postal_code"],
                 x["status"], x["called_count"], x["last_local_call_time"],
-                phone_source.get(phone, ""),
+                x.get("source_id") or phone_source.get(phone, ""),
             ]
 
-        output = io.StringIO()
-        writer = csv.writer(output)
         headers = ["First Name", "Last Name", "Phone", "Address", "City", "State",
                    "Zip", "Status", "Attempts", "Last Call", "Skip Source"]
 
-        writer.writerow([f"=== ANSWERED (AL) — {campaign_id} ==="])
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # ── Section 1: Answered live (AL) ────────────────────────────────────
+        al_leads = [x for x in leads if x["status"] == "AL"]
+        writer.writerow([f"=== CONTESTARON (AL) — {campaign_id} === ({len(al_leads)} leads)"])
         writer.writerow(headers)
-        for x in [x for x in leads if x["status"] == "AL"]:
+        for x in al_leads:
             writer.writerow(row_to_csv(x))
 
+        # ── Section 2: Eligible / callable (not excluded, not AL) ────────────
+        excluded_statuses = {"EXCLUD", "DNC", "DNCC"}
+        eligible_leads = [x for x in leads if x["status"] not in excluded_statuses and x["status"] != "AL"]
         writer.writerow([])
-        writer.writerow([f"=== POSSIBLE WORKING (PWORK) — {campaign_id} ==="])
+        writer.writerow([f"=== ELEGIBLES (POOL) — {campaign_id} === ({len(eligible_leads)} leads)"])
         writer.writerow(headers)
-        for x in [x for x in leads if x["status"] == "PWORK"]:
+        for x in eligible_leads:
             writer.writerow(row_to_csv(x))
 
+        # ── Section 3: Excluded ───────────────────────────────────────────────
+        excl_leads = [x for x in leads if x["status"] in excluded_statuses]
         writer.writerow([])
-        writer.writerow([f"=== EXCLUDED (EXCLUD) — {campaign_id} ==="])
+        writer.writerow([f"=== EXCLUIDOS — {campaign_id} === ({len(excl_leads)} leads)"])
         writer.writerow(headers)
-        for x in [x for x in leads if x["status"] == "EXCLUD"]:
+        for x in excl_leads:
             writer.writerow(row_to_csv(x))
 
         output.seek(0)
+
+        # Mark csv_downloaded after successful generation
+        set_burner_config(campaign_id, "csv_downloaded", "true")
+
         return StreamingResponse(
             iter([output.getvalue()]),
             media_type="text/csv",
@@ -534,3 +593,65 @@ def burner_export(tenant_id: str = Query(...)):
         )
     except Exception as e:
         return {"error": str(e)}
+
+
+# ─── Cycle status & reset ─────────────────────────────────────────────────────
+
+@router.get("/cycle-status")
+def burner_cycle_status(tenant_id: str = Query(...)):
+    """Return current state of the 3 cycle-completion flags."""
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"error": f"No campaign assigned to tenant '{tenant_id}'"}
+    return {
+        "campaign_id":    campaign_id,
+        "list_complete":  get_burner_config(campaign_id, "list_complete")  == "true",
+        "csv_downloaded": get_burner_config(campaign_id, "csv_downloaded") == "true",
+        "push_done":      get_burner_config(campaign_id, "push_done")      == "true",
+    }
+
+
+@router.post("/reset")
+def burner_reset(payload: dict):
+    """Reset the burn cycle. Requires all 3 conditions to be met first."""
+    tenant_id = str(payload.get("tenant_id", "")).strip()
+    if not tenant_id:
+        return {"ok": False, "error": "tenant_id required"}
+    campaign_id = get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"ok": False, "error": f"No campaign assigned to tenant '{tenant_id}'"}
+
+    list_complete  = get_burner_config(campaign_id, "list_complete")  == "true"
+    csv_downloaded = get_burner_config(campaign_id, "csv_downloaded") == "true"
+    push_done      = get_burner_config(campaign_id, "push_done")      == "true"
+
+    missing = []
+    if not list_complete:  missing.append("Lista no completada")
+    if not csv_downloaded: missing.append("CSV no descargado")
+    if not push_done:      missing.append("Push to Campaign no ejecutado")
+
+    if missing:
+        return {"ok": False, "blocked": True, "missing": missing}
+
+    # Execute reset — delete all leads in the campaign's lists
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("""
+            DELETE FROM vicidial_list
+            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+        """, (campaign_id,))
+        deleted = cur.rowcount
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        return {"ok": False, "error": f"DB error during reset: {str(e)}"}
+
+    # Clear all cycle flags
+    for key in ["list_complete", "csv_downloaded", "push_done",
+                "manual_stop", "first_start_done", "burned_complete", "start_date"]:
+        set_burner_config(campaign_id, key, "false")
+
+    logger.info("burner reset campaign=%s deleted=%d", campaign_id, deleted)
+    return {"ok": True, "reset": True, "deleted": deleted}
