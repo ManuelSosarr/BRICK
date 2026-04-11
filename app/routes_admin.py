@@ -361,7 +361,14 @@ async def admin_import_script(
     content_bytes = await file.read()
     filename = (file.filename or "").lower()
 
-    if filename.endswith(".drawio") or filename.endswith(".xml"):
+    if filename.endswith(".json"):
+        try:
+            script_dict = json.loads(content_bytes.decode("utf-8"))
+        except Exception:
+            return {"ok": False, "error": "JSON inválido"}
+        content   = json.dumps(script_dict, ensure_ascii=False)
+        file_type = "drawio"
+    elif filename.endswith(".drawio") or filename.endswith(".xml"):
         try:
             xml_str = content_bytes.decode("utf-8")
         except Exception:
