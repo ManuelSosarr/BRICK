@@ -194,17 +194,24 @@ def _next_sync_day() -> str:
 
 
 def _pg_update_vicidial_config(tenant_uuid: str, campaign_ids: list, campaign_list_map: dict, sync_day: str):
-    """Escribe/actualiza campaign_ids, campaign_list_map y sync_day en vicidial_configs."""
+    """Escribe/actualiza campaign_ids, campaign_list_map y sync_day en vicidial_configs.
+    MERGE: nunca sobreescribe campaign_ids existentes — solo agrega nuevas campañas.
+    """
     conn = _pg()
     cur  = conn.cursor()
-    cur.execute("SELECT id FROM vicidial_configs WHERE tenant_id=%s", (tenant_uuid,))
+    cur.execute("SELECT id, campaign_ids, campaign_list_map FROM vicidial_configs WHERE tenant_id=%s", (tenant_uuid,))
     row = cur.fetchone()
     if row:
+        # Merge: conservar campañas existentes + agregar las nuevas
+        existing_ids  = row[1] or []
+        existing_map  = row[2] or {}
+        merged_ids    = list(dict.fromkeys(existing_ids + campaign_ids))  # preserva orden, elimina dupes
+        merged_map    = {**existing_map, **campaign_list_map}             # nuevas listas sobreescriben solo si se pasan
         cur.execute("""
             UPDATE vicidial_configs
             SET campaign_ids=%s, campaign_list_map=%s, sync_day=%s, updated_at=NOW()
             WHERE tenant_id=%s
-        """, (json.dumps(campaign_ids), json.dumps(campaign_list_map), sync_day, tenant_uuid))
+        """, (json.dumps(merged_ids), json.dumps(merged_map), sync_day, tenant_uuid))
     else:
         cur.execute("""
             INSERT INTO vicidial_configs
