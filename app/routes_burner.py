@@ -175,12 +175,18 @@ def _process_hopper(campaign_id: str):
                 # All leads burned through — mark list complete
                 set_burner_config(campaign_id, "list_complete", "true")
             else:
+                # Excluir leads PWORK con 5+ intentos
+                cur.execute("""
+                    UPDATE vicidial_list SET status='EXCLUD'
+                    WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
+                    AND status='PWORK' AND called_count >= 5
+                """, (campaign_id,))
+                conn.commit()
                 # Reset PWORK leads so dialer can retry them
                 cur.execute("""
                     UPDATE vicidial_list SET called_since_last_reset='N'
                     WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-                    AND status = 'PWORK'
-                    AND last_local_call_time >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+                    AND status = 'PWORK' AND called_count < 5
                 """, (campaign_id,))
                 conn.commit()
     cur.close()
