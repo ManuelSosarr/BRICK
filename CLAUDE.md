@@ -1,5 +1,5 @@
 # BRICK — CLAUDE.md
-## Última actualización: 11 de Abril, 2026 | Referencia: BRICK_Handover_V24
+## Última actualización: 13 de Abril, 2026 | Referencia: BRICK_Handover_V25
 
 ---
 
@@ -362,8 +362,9 @@ pkill -f 'AST_VDauto_dial.pl --campaign={id}'
   - `INFLU` → `WNR` en STATUS_MAP
 - **CRM_DISPOS**: solo SET y NI muestran "Push to CRM"
 - **Polling**: 1s con fire inmediato al montar
-- **Customer hung up detection**: polling detecta INCALL→non-INCALL cuando `agentHungUp.current === false` → banner rojo + abre dispo panel automáticamente ✅
-- **Auto-resume tras dispo**: `_autoResume()` resetea todo el estado UI y llama Resume ✅
+- **Customer hung up detection**: `noLeadCount` ref cuenta polls consecutivos sin lead. A los **2 polls seguidos sin lead** dispara la detección — independiente de `vici_status` (elimina fallos cuando ViciDial retorna UNKNOWN transitoriamente) ✅
+- **Auto-resume tras dispo**: `_autoResume()` llama `setStatus('waiting')` al inicio (optimistic) antes de hacer API calls. UI cambia de inmediato. ✅
+- **Dispo lag eliminado**: `handleSaveDispo` corre POST dispo y 300ms grace en paralelo (`Promise.all`). Era 800ms secuencial. ✅
 - **Logout (botón)**: `handleLogout()` → llama `/api/agent/logout` + limpia localStorage + navega a `/login` ✅
 - **Back button + tab close**: `useEffect` en `loggedIn` registra `popstate` + `beforeunload` → `fetch` con `keepalive:true` para completar logout aunque el componente se desmonte ✅
 - **Agent name**: 3 capas de fallback
@@ -376,14 +377,14 @@ parts[1] = uniqueid (V... — NO es el lead_id)
 parts[2] = lead_id  ← ESTE es el correcto
 ```
 
-### Ciclo completo de llamada (verificado en prod — 6 Abril 2026)
+### Ciclo completo de llamada (actualizado — 13 Abril 2026)
 ```
-1. Agent press Resume → external_pause='RESUME' → ViciDial inicia dialing
-2. Polling detecta lead → status='oncall', timer inicia
-3a. Agent press Hangup → agentHungUp=true → external_hangup='Y' → dispo panel abre
-3b. Customer cuelga → polling detecta no-lead + agentHungUp=false → banner "Customer hung up" → dispo panel abre
-4. Agent selecciona dispo → external_status UPDATE en ViciDial
-5. _autoResume() → resetea estado → llama Resume → vuelta al paso 1
+1. Agent press Resume → external_pause='RESUME' → await asyncio.sleep(2) → clear → ViciDial inicia dialing
+2. Polling detecta lead → status='oncall', timer inicia, noLeadCount=0
+3a. Agent press Hangup → agentHungUp=true → external_hangup='Y' → dispo panel abre inmediatamente
+3b. Customer cuelga → noLeadCount++ por 2 polls consecutivos → banner rojo + dispo panel abre (robusto vs UNKNOWN)
+4. Agent selecciona dispo → external_status UPDATE en ViciDial (POST dispo + 300ms en paralelo)
+5. _autoResume() → setStatus('waiting') optimistic → chequea ViciDial → Resume → vuelta al paso 1
 ```
 
 ---
@@ -537,19 +538,69 @@ conn.close()
 
 ---
 
+## REVISIÓN DE CÓDIGO — 13 Abril 2026
+
+Auditoría general completada. Resultado: 3 categorías. Lo que se hizo y lo que se dejó conscientemente.
+
+### ✅ Corregido en esta sesión
+| Fix | Archivo | Detalle |
+|---|---|---|
+| `time.sleep(2)` → `asyncio.sleep(2)` | `routers/agent.py` | Bloqueaba el event loop completo en Resume y Pause. Ahora cierra conexión antes del await, abre nueva conexión limpia después. |
+| `print()` → `logger.info()` | `dialflow/backend/main.py` | Debug print en startup reemplazado con logger estándar. |
+| `noLeadCount` — detección robusta | `Agent.tsx` | Conteo de polls consecutivos sin lead en lugar de validar `vici_status !== 'UNKNOWN'`. |
+| Optimistic dispo | `Agent.tsx` | `setStatus('waiting')` al inicio de `_autoResume()` antes de API calls. Lag percibido eliminado. |
+| `Promise.all` en dispo | `Agent.tsx` | POST dispo y 300ms grace en paralelo. Era 800ms secuencial. |
+
+### ⛔ Dejado conscientemente — con razón documentada
+| Issue | Por qué NO se toca ahora |
+|---|---|
+| Auth en endpoints de agente (`/resume`, `/pause`, `/hangup`, `/dispo`) | El interceptor 401 de `client.ts` hace `localStorage.clear()` + redirect a `/login`. Un token expirado mid-call dejaría al agente sin poder colgar ni guardar dispo. **Requiere token refresh automático primero.** |
+| CORS wildcard en puerto 8000 | ASUS detrás de ngrok, acceso solo por red local/tunnel. Riesgo real es mínimo hasta servidor público. |
+| Credenciales en config.py | Máquina cerrada (ASUS local). Riesgo aceptable en esta etapa. |
+| `SECRET_KEY` con fallback de dev | Aceptable mientras ASUS no sea servidor público. |
+| localStorage para JWT tokens | Estándar en SPAs. XSS requeriría comprometer el frontend primero. |
+
+---
+
+## CHECKLIST MIGRACIÓN A SERVIDOR PRIVADO
+
+**Cuando BRICK se monte en servidor dedicado con IP estática, revisar estos puntos ANTES de lanzar.**
+
+### Seguridad — Crítico
+- [ ] **Auth en endpoints de agente** — Agregar `Depends(get_current_user)` a `/resume`, `/pause`, `/hangup`, `/dispo`, `/logout`, `/lead/{user}`. Implementar refresh automático de tokens primero para no bloquear agentes mid-call.
+- [ ] **CORS restringido en puerto 8000** — Reemplazar `allow_origins=["*"]` con dominios específicos (igual que 8001 que ya usa `settings.ENVIRONMENT`).
+- [ ] **SECRET_KEY forzado** — Hacer que el servidor falle en startup si `SECRET_KEY` no está en env vars: `if not SECRET_KEY: raise RuntimeError("SECRET_KEY not set")`.
+- [ ] **Credenciales a variables de entorno** — Mover `PG_DSN`, `VICI_API_PASS`, `_VICI_DB` y URLs hardcodeadas a `.env` con `python-dotenv`. Nunca en código.
+- [ ] **Webhook ViciDial con auth** — `/webhook/vici-dispo` necesita firma HMAC o token fijo en header para verificar que viene del dialer.
+- [ ] **Rate limiting** — Agregar `slowapi` o middleware de rate limiting a endpoints públicos de login y webhook.
+
+### Infraestructura
+- [ ] **Rutas absolutas de Windows** → relativas o env vars. `DB_PATH = "C:/Users/sosai/BRICK/..."` rompe en Linux.
+- [ ] **SSH key path** → variable de entorno con fallback: `SSH_KEY = os.getenv("VICI_SSH_KEY", "~/.ssh/vicidial_key")`.
+- [ ] **httpOnly cookies** para JWT tokens en lugar de localStorage (si se migra a SSR o se endurece seguridad XSS).
+- [ ] **PostgreSQL password** — cambiar `dialflow/dialflow` por credenciales fuertes en el nuevo servidor.
+- [ ] **MySQL tunnel** — revisar si el nuevo servidor puede conectar directo al dialer o sigue necesitando tunnel SSH.
+
+### Deuda técnica antes de escalar
+- [ ] **Bare `except:` clauses** — reemplazar con `except Exception as e: logger.error(...)` para no perder errores silenciosos en producción.
+- [ ] **Tenants aislados en queries** — verificar que agentes de un tenant no puedan ver/afectar leads de otro en endpoints de agent.py.
+- [ ] **`console.warn` en Agent.tsx** — eliminar o rebajar a `console.debug` (visibles en console del agente).
+
+---
+
 ## PENDIENTE
 
 | # | Feature | Prioridad | Notas |
 |---|---|---|---|
-| 0 | **BossBuy dropdown campañas** — solo muestra IBFEO, faltan las demás campañas del tenant | Alta | Verificar en **ASUS PowerShell**: `docker exec -it dialflow_postgres psql -U dialflow -d dialflow -c "SELECT tenant_id, campaign_ids FROM vicidial_configs;"` — el Sync Wizard debe haber guardado todas las campañas ahí |
-| 1 | Data Burner — verificar números BossBuy/IBFEO | Alta | Verificar que Elegibles y AL muestren correctamente tras el fix de vicidial_log |
-| 2 | Script Library — cargar REI script | Media | Importar `rei_script.json` via UI → asignar a campaña MUH |
-| 3 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
-| 4 | Push to CRM (Zapier → ResImpli) | Hold | URL Zapier no configurada — esperando pago. Oportunidad |
-| 5 | GDrive upload post-sync | Hold | Necesita Service Account JSON Google Cloud en ASUS. Oportunidad |
-| 6 | Email notification post-sync | Hold | Necesita Gmail App Password en ASUS. Oportunidad |
-| 7 | County Link | Media | Endpoint existe, verificar con datos reales en PropertyMaster |
-| 8 | Dedicated server + static IP | Q2 Hold | Migración de ASUS cuando se afine |
+| 1 | **BRICK.ps1 en ASUS** — recoger todos los cambios pusheados | Alta | logout fix, optimistic UI, hopper fix, BossBuy campaigns, customer hang-up robustness, dispo lag, asyncio.sleep |
+| 2 | SQL de limpieza DialFlow→BRICK | Alta | Ver sección arriba — PostgreSQL + SQLite |
+| 3 | Push to CRM (Zapier → ResImpli) | Hold | Esperando pago ResImpli |
+| 4 | GDrive upload post-sync | Hold | Necesita Service Account JSON Google Cloud en ASUS |
+| 5 | Email notification post-sync | Hold | Necesita Gmail App Password en ASUS |
+| 6 | County Link | Monitor | Apareciendo correctamente, monitorear con datos reales |
+| 7 | Dedicated server + static IP | Q2 | Ver checklist de migración en sección arriba |
+| 8 | Beta users onboarding | Esperar | Manuel avisa cuando estén listos |
+| 9 | Auth en endpoints de agente | Q2 | Bloqueado hasta implementar token refresh. Ver checklist migración. |
 
 ### Variables de entorno pendientes en ASUS (para GDrive + Email)
 ```powershell
