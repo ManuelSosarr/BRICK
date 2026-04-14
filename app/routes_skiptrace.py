@@ -8,6 +8,12 @@ from app.auth import get_current_tenant
 
 router = APIRouter()
 
+PLATFORM_LABELS = {
+    "resimpli":    "ResImpli",
+    "skipgenie":   "Skip Genie",
+    "dealmachine": "DealMachine",
+}
+
 RESIMPLI_PHONE_COLS = [f"Phone_{i}" for i in range(1, 11)]
 SKIPGENIE_MOBILE_COLS = [f"MOBILE{i}" for i in range(1, 6)]
 SKIPGENIE_PHONE_COLS = [f"PHONE{i}" for i in range(1, 11)]
@@ -108,12 +114,16 @@ async def upload_skiptrace(
     content = await file.read()
     df = pd.read_csv(io.BytesIO(content))
 
+    # Build the source label: always include platform name, append source_tag if provided
+    platform_label = PLATFORM_LABELS.get(platform, platform)
+    effective_source = f"{platform_label} — {source_tag.strip()}" if source_tag.strip() else platform_label
+
     if platform == "resimpli":
-        records = parse_resimpli(df, source_tag, campaign_id, list_id)
+        records = parse_resimpli(df, effective_source, campaign_id, list_id)
     elif platform == "skipgenie":
-        records = parse_skipgenie(df, source_tag, campaign_id, list_id)
+        records = parse_skipgenie(df, effective_source, campaign_id, list_id)
     elif platform == "dealmachine":
-        records = parse_dealmachine(df, source_tag, campaign_id, list_id)
+        records = parse_dealmachine(df, effective_source, campaign_id, list_id)
     else:
         return {"error": "Plataforma no reconocida"}
 
