@@ -13,6 +13,7 @@ from app.routes_skiptrace import router as skiptrace_router
 from app.routes_agent import router as agent_router
 from app.routes_burner import router as burner_router
 from app.routes_admin import router as admin_router
+from app.routes_copilot import router as copilot_router
 from app.scheduler import start_scheduler, stop_scheduler
 
 Base.metadata.create_all(bind=engine)
@@ -47,3 +48,4 @@ app.include_router(skiptrace_router, prefix="/api/skiptrace", tags=["skiptrace"]
 app.include_router(agent_router,     prefix="/api/agent",     tags=["agent"])
 app.include_router(burner_router,    prefix="/api/burner",    tags=["burner"])
 app.include_router(admin_router,     prefix="/api/admin",     tags=["admin"])
+app.include_router(copilot_router,   prefix="/api/copilot",   tags=["copilot"])
