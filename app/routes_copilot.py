@@ -211,16 +211,27 @@ def copilot_lists(campaign_id: str = Query(...)):
 
 def copilot_push_worker():
     """Every 30s: for each active copilot campaign push new AL leads to their dest list."""
+    last_reset_date = None
+
     while True:
         try:
             now  = datetime.now(EST) if EST else datetime.now()
             hour = now.hour
+            today = now.strftime('%Y-%m-%d')
+
+            # Reset pushed_today counter at midnight EST for all active campaigns
+            if today != last_reset_date:
+                for campaign_id in get_active_copilot_campaigns():
+                    set_copilot_config(campaign_id, "pushed_today", "0")
+                last_reset_date = today
 
             for campaign_id in get_active_copilot_campaigns():
                 try:
-                    dest_list_id = get_copilot_config(campaign_id, "dest_list_id")
-                    if not dest_list_id:
+                    dest_list_id_str = get_copilot_config(campaign_id, "dest_list_id")
+                    if not dest_list_id_str:
                         continue  # not configured yet
+
+                    dest_list_id = int(dest_list_id_str)  # cast to int for MySQL
 
                     if not (7 <= hour < 15):
                         continue  # outside operating hours
