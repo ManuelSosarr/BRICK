@@ -6,6 +6,7 @@ import time as time_module
 from datetime import datetime
 from fastapi import APIRouter, Query
 from app.vici_connector import get_connection
+from app.routes_burner import get_campaign_for_tenant as _get_campaign_for_tenant
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -60,13 +61,6 @@ def get_active_copilot_campaigns() -> list[str]:
     conn.close()
     return [r[0].replace("copilot_active__", "") for r in rows]
 
-def _get_campaign_for_tenant(tenant_id: str) -> str | None:
-    conn = sqlite3.connect(DB_PATH)
-    cur  = conn.cursor()
-    cur.execute("SELECT campaign_id FROM tenants WHERE tenant_id=? AND active=1", (tenant_id,))
-    row = cur.fetchone()
-    conn.close()
-    return row[0] if (row and row[0]) else None
 
 def _ssh(remote_cmd: str):
     subprocess.Popen([
