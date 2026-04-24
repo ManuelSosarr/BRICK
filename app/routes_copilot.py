@@ -60,14 +60,17 @@ def get_active_copilot_campaigns() -> list[str]:
     return [r[0].replace("copilot_active__", "") for r in rows]
 
 
-def _ssh(remote_cmd: str):
-    subprocess.Popen([
-        "ssh", "-i", VICI_KEY,
-        "-o", "StrictHostKeyChecking=no",
-        "-o", "BatchMode=yes",
-        "-o", "ConnectTimeout=10",
-        VICI_HOST, remote_cmd
-    ])
+def _ssh(remote_cmd: str) -> tuple[int, str, str]:
+    """Blocking SSH — waits for completion and returns (returncode, stdout, stderr)."""
+    result = subprocess.run(
+        ["ssh", "-i", VICI_KEY,
+         "-o", "StrictHostKeyChecking=no",
+         "-o", "BatchMode=yes",
+         "-o", "ConnectTimeout=10",
+         VICI_HOST, remote_cmd],
+        capture_output=True, text=True, timeout=15
+    )
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
 # ── Core push logic (used by endpoint + scheduler) ────────────────────────────
@@ -251,10 +254,12 @@ def copilot_toggle(payload: dict):
     if action == "START":
         set_copilot_config(campaign_id, "copilot_active", "true")
         set_copilot_config(campaign_id, "pushed_today",   "0")
-        _ssh(f"nohup {AUTODIAL} --campaign={campaign_id} --loop > /dev/null 2>&1 &")
+        rc, out, err = _ssh(f"nohup {AUTODIAL} --campaign={campaign_id} --loop > /dev/null 2>&1 &")
+        logger.info("copilot START ssh rc=%s out=%s err=%s", rc, out, err)
     else:
         set_copilot_config(campaign_id, "copilot_active", "false")
-        _ssh(f"pkill -f '{AUTODIAL} --campaign={campaign_id}'; echo done")
+        rc, out, err = _ssh(f"pkill -f '{AUTODIAL} --campaign={campaign_id}'; echo done")
+        logger.info("copilot STOP ssh rc=%s out=%s err=%s", rc, out, err)
 
     logger.info("copilot toggle %s campaign=%s", action, campaign_id)
     return {"ok": affected > 0, "status": new_status}
