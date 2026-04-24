@@ -188,36 +188,6 @@ def copilot_set_dest(payload: dict):
     return {"ok": True, "campaign_id": campaign_id, "dest_list_id": dest_list_id}
 
 
-@router.get("/debug")
-def copilot_debug(tenant_id: str = Query(...)):
-    campaign_id = _get_campaign_for_tenant(tenant_id)
-    if not campaign_id:
-        return {"error": f"No campaign for tenant '{tenant_id}'"}
-    try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-        # MySQL server time
-        cur.execute("SELECT NOW() as server_now, CURDATE() as server_date")
-        times = cur.fetchone()
-        # Last 5 calls no date filter
-        cur.execute("""
-            SELECT call_date, status FROM vicidial_log
-            WHERE campaign_id=%s ORDER BY call_date DESC LIMIT 5
-        """, (campaign_id,))
-        recent = cur.fetchall()
-        cur.close()
-        conn.close()
-        est_now = (datetime.now(EST) if EST else datetime.now()).strftime('%Y-%m-%d %H:%M:%S')
-        return {
-            "campaign_id":   campaign_id,
-            "mysql_now":     str(times["server_now"]),
-            "mysql_date":    str(times["server_date"]),
-            "python_est_now": est_now,
-            "recent_calls":  [{"call_date": str(r["call_date"]), "status": r["status"]} for r in recent],
-        }
-    except Exception as e:
-        return {"error": str(e)}
-
 
 @router.get("/lists")
 def copilot_lists(campaign_id: str = Query(...)):
