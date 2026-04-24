@@ -106,6 +106,13 @@ def copilot_status(tenant_id: str = Query(...)):
             WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
         """, (campaign_id,))
         kpis = cur.fetchone()
+
+        # Diagnostic: all-time count + most recent call (no date filter)
+        cur.execute("""
+            SELECT COUNT(*) as alltime_calls, MAX(call_date) as latest_call
+            FROM vicidial_log WHERE campaign_id=%s
+        """, (campaign_id,))
+        diag = cur.fetchone()
         cur.close()
         conn.close()
 
@@ -123,6 +130,10 @@ def copilot_status(tenant_id: str = Query(...)):
             "copilot_active":   get_copilot_config(campaign_id, "copilot_active") == "true",
             "dest_list_id":     dest_list_id,
             "last_call":        str(kpis["last_call"]) if kpis["last_call"] else None,
+            "_diag": {
+                "alltime_calls": int(diag["alltime_calls"] or 0),
+                "latest_call":   str(diag["latest_call"]) if diag["latest_call"] else None,
+            }
         }
     except Exception as e:
         return {"error": str(e)}
