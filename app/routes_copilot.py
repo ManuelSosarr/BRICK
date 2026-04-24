@@ -125,9 +125,24 @@ def run_push_for_tenant(tenant_id: str) -> int:
     return _run_push_for_campaign(campaign_id)
 
 
+def _get_all_configured_campaigns() -> list[str]:
+    """All campaign_ids that have a dest_list_id configured — regardless of copilot_active status."""
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_table(cur)
+    cur.execute("SELECT key FROM copilot_config WHERE key LIKE 'dest_list_id__%'")
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0].replace("dest_list_id__", "") for r in rows]
+
+
 def run_copilot_push_all():
-    """Push AL leads for ALL active copilot campaigns. Called by APScheduler every 30s."""
-    campaigns = get_active_copilot_campaigns()
+    """
+    Push AL leads for ALL campaigns that have dest_list_id configured.
+    Unconditional — no copilot_active check, no agent status check, no time gate.
+    Called by APScheduler every 30s.
+    """
+    campaigns = _get_all_configured_campaigns()
     if not campaigns:
         return
     for campaign_id in campaigns:
@@ -138,8 +153,8 @@ def run_copilot_push_all():
 
 
 def reset_pushed_today_all():
-    """Reset pushed_today counter for all active campaigns. Called at midnight EST."""
-    for campaign_id in get_active_copilot_campaigns():
+    """Reset pushed_today counter for all configured campaigns. Called at midnight EST."""
+    for campaign_id in _get_all_configured_campaigns():
         try:
             set_copilot_config(campaign_id, "pushed_today", "0")
             logger.info("copilot: reset pushed_today for campaign=%s", campaign_id)

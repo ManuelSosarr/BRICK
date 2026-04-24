@@ -77,6 +77,38 @@ ngrok http 5173
 # Ver URL pública en http://localhost:4040
 ```
 
+### ⚠️ Acceso directo BRICK.lnk — Problema conocido post-Windows Update
+
+**Síntoma:** Doble clic en el acceso directo del Desktop no hace nada.
+
+**Causa:** Windows Update puede mover el Desktop de `C:\Users\sosai\Desktop` a
+`C:\Users\sosai\OneDrive\Desktop`. El `.lnk` queda apuntando al path viejo y no encuentra el script.
+
+**Diagnóstico rápido:**
+```powershell
+$sh = New-Object -ComObject WScript.Shell
+$lnk = $sh.CreateShortcut("C:\Users\sosai\OneDrive\Desktop\BRICK.lnk")
+$lnk | Select-Object TargetPath, Arguments
+# Si Arguments apunta a C:\Users\sosai\Desktop\... (sin OneDrive) → está roto
+```
+
+**Fix (reparar el acceso directo):**
+```powershell
+$sh = New-Object -ComObject WScript.Shell
+$lnk = $sh.CreateShortcut("C:\Users\sosai\OneDrive\Desktop\BRICK.lnk")
+$lnk.TargetPath = "C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+$lnk.Arguments = '-ExecutionPolicy Bypass -File "C:\Users\sosai\OneDrive\Desktop\BRICK.ps1"'
+$lnk.WorkingDirectory = "C:\Users\sosai\OneDrive\Desktop"
+$lnk.Save()
+# Activar "Ejecutar como administrador"
+$bytes = [System.IO.File]::ReadAllBytes("C:\Users\sosai\OneDrive\Desktop\BRICK.lnk")
+$bytes[0x15] = $bytes[0x15] -bor 0x20
+[System.IO.File]::WriteAllBytes("C:\Users\sosai\OneDrive\Desktop\BRICK.lnk", $bytes)
+```
+
+**Prevención:** Después de cualquier Windows Update, verificar que el acceso directo aún funciona.
+Si falla, correr el bloque de fix de arriba.
+
 ### BRICK-watchdog.ps1
 Monitorea puertos 8000 y 8001 cada 30s. Si alguno cae, mata todos los Python y los relanza.
 Archivo: `C:\Users\sosai\BRICK\BRICK-watchdog.ps1`
@@ -740,3 +772,4 @@ Flujo decidido: **draw.io → importar XML → guardar → asignar a campaña**.
 - **V21 (6 Abril 2026)**: Call cycle completo (hangup, customer hung up, dispo, auto-resume, logout, back button), disposiciones AMD/PS/INFLU, Script Flow Editor reescrito estilo Lucidchart, bcrypt pinado a 4.0.1
 - **V22 (6 Abril 2026)**: Weekly Auto-Sync — APScheduler (thu/fri/sat/sun 8:05pm EST), round-robin sync_day al crear tenant, campaign_list_map en vicidial_configs, wizard de sync extendido a 4 pasos (campañas→listas→info→confirmar), GDrive+email pendientes de credenciales
 - **V23 (10 Abril 2026)**: Statuses PWORK/EXCLUD en todos los endpoints Burner, SSH toggle AST_VDauto_dial, available_only_ratio_tally=N, Push to Campaign 2 dropdowns + multi-select listas, /api/burner/lists sin restricción tenant, billing solo isMaster, draw.io parser _split_hint wired, rei_script.json, NGROK manual + popup BRICK.ps1, vite allowedHosts
+- **V24 (24 Abril 2026)**: Co-Pilot module — pre-dialer inteligente que mueve AL leads a lista destino cada 30s via APScheduler. Push es INCONDICIONAL: cualquier campaña con `dest_list_id` configurado en `copilot_config` recibe el push sin importar `copilot_active` ni estado del Remote Agent. Scheduler registrado en `scheduler.py::start_scheduler()` usando el mismo `BackgroundScheduler` que el weekly sync. Jobs: `copilot_push` (interval 30s) + `copilot_reset` (midnight EST). UI: tenant selector (master ve todos), KPIs de hoy, picker de lista destino, botones START/STOP para remote agent.
