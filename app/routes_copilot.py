@@ -1,8 +1,6 @@
 import sqlite3
 import subprocess
-import threading
 import logging
-import time as time_module
 from datetime import datetime
 from fastapi import APIRouter, Query
 from app.vici_connector import get_connection
@@ -48,18 +46,6 @@ def set_copilot_config(campaign_id: str, key: str, value):
                 (_cfg_key(campaign_id, key), str(value)))
     conn.commit()
     conn.close()
-
-def get_active_copilot_campaigns() -> list[str]:
-    """All campaign_ids where copilot is running (active + not manually stopped)."""
-    conn = sqlite3.connect(DB_PATH)
-    cur  = conn.cursor()
-    _init_table(cur)
-    cur.execute(
-        "SELECT key FROM copilot_config WHERE key LIKE 'copilot_active__%' AND value='true'"
-    )
-    rows = cur.fetchall()
-    conn.close()
-    return [r[0].replace("copilot_active__", "") for r in rows]
 
 
 def _ssh(remote_cmd: str):
@@ -188,7 +174,6 @@ def copilot_set_dest(payload: dict):
     return {"ok": True, "campaign_id": campaign_id, "dest_list_id": dest_list_id}
 
 
-
 @router.get("/lists")
 def copilot_lists(campaign_id: str = Query(...)):
     """Return active lists for a campaign (for the dest list picker)."""
@@ -207,106 +192,59 @@ def copilot_lists(campaign_id: str = Query(...)):
         return {"error": str(e)}
 
 
-# ── Background workers (multi-tenant) ─────────────────────────────────────────
+@router.post("/push-now")
+def copilot_push_now(payload: dict):
+    """Called by the frontend every 30s to move AL leads to the dest list."""
+    tenant_id = str(payload.get("tenant_id", "")).strip()
+    if not tenant_id:
+        return {"ok": False, "moved": 0, "error": "tenant_id required"}
 
-def copilot_push_worker():
-    """Every 30s: for each active copilot campaign push new AL leads to their dest list."""
-    last_reset_date = None
+    campaign_id = _get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return {"ok": False, "moved": 0, "error": f"No campaign for tenant '{tenant_id}'"}
 
-    while True:
-        try:
-            now  = datetime.now(EST) if EST else datetime.now()
-            hour = now.hour
-            today = now.strftime('%Y-%m-%d')
+    dest_list_id_str = get_copilot_config(campaign_id, "dest_list_id")
+    if not dest_list_id_str:
+        return {"ok": False, "moved": 0, "error": "dest_list_id not configured"}
 
-            # Reset pushed_today counter at midnight EST for all active campaigns
-            if today != last_reset_date:
-                for campaign_id in get_active_copilot_campaigns():
-                    set_copilot_config(campaign_id, "pushed_today", "0")
-                last_reset_date = today
+    dest_list_id = int(dest_list_id_str)
 
-            for campaign_id in get_active_copilot_campaigns():
-                try:
-                    dest_list_id_str = get_copilot_config(campaign_id, "dest_list_id")
-                    if not dest_list_id_str:
-                        continue  # not configured yet
+    try:
+        conn = get_connection()
+        cur  = conn.cursor(dictionary=True)
 
-                    dest_list_id = int(dest_list_id_str)  # cast to int for MySQL
+        # Find all AL leads in any list of this campaign, excluding the dest list itself
+        cur.execute("""
+            SELECT lead_id FROM vicidial_list
+            WHERE list_id IN (
+                SELECT list_id FROM vicidial_lists WHERE campaign_id=%s
+            )
+            AND status = 'AL'
+            AND list_id != %s
+        """, (campaign_id, dest_list_id))
+        leads = cur.fetchall()
 
-                    if not (7 <= hour < 15):
-                        continue  # outside operating hours
+        moved = 0
+        if leads:
+            lead_ids     = [str(l["lead_id"]) for l in leads]
+            placeholders = ",".join(["%s"] * len(lead_ids))
+            cur.execute(f"""
+                UPDATE vicidial_list
+                SET list_id=%s, status='NEW',
+                    called_since_last_reset='N', called_count=0
+                WHERE lead_id IN ({placeholders})
+            """, [dest_list_id] + lead_ids)
+            conn.commit()
+            moved = len(leads)
+            current = int(get_copilot_config(campaign_id, "pushed_today") or 0)
+            set_copilot_config(campaign_id, "pushed_today", str(current + moved))
+            logger.info("copilot push-now: moved %d AL leads → list %s (campaign %s)",
+                        moved, dest_list_id, campaign_id)
 
-                    conn = get_connection()
-                    cur  = conn.cursor(dictionary=True)
+        cur.close()
+        conn.close()
+        return {"ok": True, "moved": moved}
 
-                    # Query vicidial_list directly — leads have status AL for longer than 35s
-                    cur.execute("""
-                        SELECT lead_id FROM vicidial_list
-                        WHERE list_id IN (
-                            SELECT list_id FROM vicidial_lists WHERE campaign_id=%s
-                        )
-                        AND status = 'AL'
-                        AND list_id != %s
-                    """, (campaign_id, dest_list_id))
-                    leads = cur.fetchall()
-
-                    if leads:
-                        lead_ids     = [str(l["lead_id"]) for l in leads]
-                        placeholders = ",".join(["%s"] * len(lead_ids))
-                        cur.execute(f"""
-                            UPDATE vicidial_list
-                            SET list_id=%s, status='NEW',
-                                called_since_last_reset='N', called_count=0
-                            WHERE lead_id IN ({placeholders})
-                        """, [dest_list_id] + lead_ids)
-                        conn.commit()
-
-                        current = int(get_copilot_config(campaign_id, "pushed_today") or 0)
-                        set_copilot_config(campaign_id, "pushed_today", str(current + len(leads)))
-                        logger.info("copilot pushed %d AL leads → list %s (campaign %s)",
-                                    len(leads), dest_list_id, campaign_id)
-
-                    cur.close()
-                    conn.close()
-
-                except Exception as e:
-                    logger.warning("copilot_push_worker campaign=%s error: %s", campaign_id, e)
-
-        except Exception as e:
-            logger.warning("copilot_push_worker outer error: %s", e)
-
-        time_module.sleep(30)
-
-
-def copilot_schedule_worker():
-    """Every minute: auto-STOP any active copilot campaigns that are past 3pm EST."""
-    while True:
-        try:
-            now  = datetime.now(EST) if EST else datetime.now()
-            hour = now.hour
-
-            if hour >= 15:
-                for campaign_id in get_active_copilot_campaigns():
-                    try:
-                        conn = get_connection()
-                        cur  = conn.cursor()
-                        cur.execute(
-                            "UPDATE vicidial_remote_agents SET status='INACTIVE' WHERE campaign_id=%s",
-                            (campaign_id,)
-                        )
-                        conn.commit()
-                        cur.close()
-                        conn.close()
-                        set_copilot_config(campaign_id, "copilot_active", "false")
-                        logger.info("copilot auto-stopped campaign=%s at 3pm EST", campaign_id)
-                    except Exception as e:
-                        logger.warning("copilot_schedule_worker campaign=%s error: %s", campaign_id, e)
-
-        except Exception as e:
-            logger.warning("copilot_schedule_worker outer error: %s", e)
-
-        time_module.sleep(60)
-
-
-threading.Thread(target=copilot_push_worker,     daemon=True).start()
-threading.Thread(target=copilot_schedule_worker,  daemon=True).start()
+    except Exception as e:
+        logger.warning("copilot push-now error tenant=%s: %s", tenant_id, e)
+        return {"ok": False, "moved": 0, "error": str(e)}
