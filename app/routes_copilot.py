@@ -100,9 +100,10 @@ def copilot_status(tenant_id: str = Query(...)):
                 COUNT(*) as total_calls,
                 SUM(CASE WHEN status='AL'                                            THEN 1 ELSE 0 END) as answered,
                 SUM(CASE WHEN status IN ('NA','AB','PWORK','N')                      THEN 1 ELSE 0 END) as possible_working,
-                SUM(CASE WHEN status IN ('DROP','PDROP','AA','EXCLUD','DNC','DNCC')  THEN 1 ELSE 0 END) as excluded
+                SUM(CASE WHEN status IN ('DROP','PDROP','AA','EXCLUD','DNC','DNCC')  THEN 1 ELSE 0 END) as excluded,
+                MAX(call_date) as last_call
             FROM vicidial_log
-            WHERE campaign_id=%s AND call_date >= CURDATE()
+            WHERE campaign_id=%s AND call_date >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
         """, (campaign_id,))
         kpis = cur.fetchone()
         cur.close()
@@ -121,6 +122,7 @@ def copilot_status(tenant_id: str = Query(...)):
             "pushed_today":     int(get_copilot_config(campaign_id, "pushed_today") or 0),
             "copilot_active":   get_copilot_config(campaign_id, "copilot_active") == "true",
             "dest_list_id":     dest_list_id,
+            "last_call":        str(kpis["last_call"]) if kpis["last_call"] else None,
         }
     except Exception as e:
         return {"error": str(e)}
