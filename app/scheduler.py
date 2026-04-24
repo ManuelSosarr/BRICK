@@ -384,6 +384,24 @@ def start_scheduler():
     global _scheduler
     _scheduler = BackgroundScheduler(timezone="America/New_York")
 
+    # ── Co-Pilot: push AL leads every 30s during operating hours ─────────────
+    from app.routes_copilot import run_copilot_push_all, reset_pushed_today_all
+    _scheduler.add_job(
+        run_copilot_push_all,
+        trigger="interval",
+        seconds=30,
+        id="copilot_push",
+        name="Co-Pilot AL Push",
+        replace_existing=True,
+    )
+    _scheduler.add_job(
+        reset_pushed_today_all,
+        trigger=CronTrigger(hour=0, minute=0, timezone="America/New_York"),
+        id="copilot_reset",
+        name="Co-Pilot midnight reset",
+        replace_existing=True,
+    )
+
     # 8:05pm EST — 5 minutos después de que para el Data Burner (8pm)
     for day in ["thu", "fri", "sat", "sun"]:
         _scheduler.add_job(

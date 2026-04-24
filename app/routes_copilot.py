@@ -47,6 +47,18 @@ def set_copilot_config(campaign_id: str, key: str, value):
     conn.commit()
     conn.close()
 
+def get_active_copilot_campaigns() -> list[str]:
+    """All campaign_ids where copilot is running (copilot_active = 'true')."""
+    conn = sqlite3.connect(DB_PATH)
+    cur  = conn.cursor()
+    _init_table(cur)
+    cur.execute(
+        "SELECT key FROM copilot_config WHERE key LIKE 'copilot_active__%' AND value='true'"
+    )
+    rows = cur.fetchall()
+    conn.close()
+    return [r[0].replace("copilot_active__", "") for r in rows]
+
 
 def _ssh(remote_cmd: str):
     subprocess.Popen([
@@ -56,6 +68,83 @@ def _ssh(remote_cmd: str):
         "-o", "ConnectTimeout=10",
         VICI_HOST, remote_cmd
     ])
+
+
+# ── Core push logic (used by endpoint + scheduler) ────────────────────────────
+
+def _run_push_for_campaign(campaign_id: str) -> int:
+    """
+    Move all AL leads in any list of `campaign_id` (except dest_list) to dest_list as NEW.
+    Returns number of leads moved.
+    """
+    dest_list_id_str = get_copilot_config(campaign_id, "dest_list_id")
+    if not dest_list_id_str:
+        return 0
+
+    dest_list_id = int(dest_list_id_str)
+
+    conn = get_connection()
+    cur  = conn.cursor(dictionary=True)
+    cur.execute("""
+        SELECT lead_id FROM vicidial_list
+        WHERE list_id IN (
+            SELECT list_id FROM vicidial_lists WHERE campaign_id=%s
+        )
+        AND status = 'AL'
+        AND list_id != %s
+    """, (campaign_id, dest_list_id))
+    leads = cur.fetchall()
+
+    moved = 0
+    if leads:
+        lead_ids     = [str(l["lead_id"]) for l in leads]
+        placeholders = ",".join(["%s"] * len(lead_ids))
+        cur.execute(f"""
+            UPDATE vicidial_list
+            SET list_id=%s, status='NEW',
+                called_since_last_reset='N', called_count=0
+            WHERE lead_id IN ({placeholders})
+        """, [dest_list_id] + lead_ids)
+        conn.commit()
+        moved = len(leads)
+        current = int(get_copilot_config(campaign_id, "pushed_today") or 0)
+        set_copilot_config(campaign_id, "pushed_today", str(current + moved))
+        logger.info("copilot: moved %d AL leads → list %s (campaign %s)",
+                    moved, dest_list_id, campaign_id)
+
+    cur.close()
+    conn.close()
+    return moved
+
+
+def run_push_for_tenant(tenant_id: str) -> int:
+    """Push AL leads for a tenant. Called by /push-now endpoint."""
+    campaign_id = _get_campaign_for_tenant(tenant_id)
+    if not campaign_id:
+        return 0
+    return _run_push_for_campaign(campaign_id)
+
+
+def run_copilot_push_all():
+    """Push AL leads for ALL active copilot campaigns. Called by APScheduler every 30s."""
+    campaigns = get_active_copilot_campaigns()
+    if not campaigns:
+        return
+    for campaign_id in campaigns:
+        try:
+            _run_push_for_campaign(campaign_id)
+        except Exception as e:
+            logger.warning("copilot scheduler error campaign=%s: %s", campaign_id, e)
+
+
+def reset_pushed_today_all():
+    """Reset pushed_today counter for all active campaigns. Called at midnight EST."""
+    for campaign_id in get_active_copilot_campaigns():
+        try:
+            set_copilot_config(campaign_id, "pushed_today", "0")
+            logger.info("copilot: reset pushed_today for campaign=%s", campaign_id)
+        except Exception as e:
+            logger.warning("copilot midnight reset error campaign=%s: %s", campaign_id, e)
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
@@ -124,7 +213,6 @@ def copilot_toggle(payload: dict):
     if not campaign_id:
         return {"ok": False, "error": f"No campaign assigned to tenant '{tenant_id}'"}
 
-    # Require dest_list_id to be configured before starting
     if action == "START":
         dest_list_id = get_copilot_config(campaign_id, "dest_list_id")
         if not dest_list_id:
@@ -194,57 +282,13 @@ def copilot_lists(campaign_id: str = Query(...)):
 
 @router.post("/push-now")
 def copilot_push_now(payload: dict):
-    """Called by the frontend every 30s to move AL leads to the dest list."""
+    """Manual push triggered by the frontend (fallback / on-demand)."""
     tenant_id = str(payload.get("tenant_id", "")).strip()
     if not tenant_id:
         return {"ok": False, "moved": 0, "error": "tenant_id required"}
-
-    campaign_id = _get_campaign_for_tenant(tenant_id)
-    if not campaign_id:
-        return {"ok": False, "moved": 0, "error": f"No campaign for tenant '{tenant_id}'"}
-
-    dest_list_id_str = get_copilot_config(campaign_id, "dest_list_id")
-    if not dest_list_id_str:
-        return {"ok": False, "moved": 0, "error": "dest_list_id not configured"}
-
-    dest_list_id = int(dest_list_id_str)
-
     try:
-        conn = get_connection()
-        cur  = conn.cursor(dictionary=True)
-
-        # Find all AL leads in any list of this campaign, excluding the dest list itself
-        cur.execute("""
-            SELECT lead_id FROM vicidial_list
-            WHERE list_id IN (
-                SELECT list_id FROM vicidial_lists WHERE campaign_id=%s
-            )
-            AND status = 'AL'
-            AND list_id != %s
-        """, (campaign_id, dest_list_id))
-        leads = cur.fetchall()
-
-        moved = 0
-        if leads:
-            lead_ids     = [str(l["lead_id"]) for l in leads]
-            placeholders = ",".join(["%s"] * len(lead_ids))
-            cur.execute(f"""
-                UPDATE vicidial_list
-                SET list_id=%s, status='NEW',
-                    called_since_last_reset='N', called_count=0
-                WHERE lead_id IN ({placeholders})
-            """, [dest_list_id] + lead_ids)
-            conn.commit()
-            moved = len(leads)
-            current = int(get_copilot_config(campaign_id, "pushed_today") or 0)
-            set_copilot_config(campaign_id, "pushed_today", str(current + moved))
-            logger.info("copilot push-now: moved %d AL leads → list %s (campaign %s)",
-                        moved, dest_list_id, campaign_id)
-
-        cur.close()
-        conn.close()
+        moved = run_push_for_tenant(tenant_id)
         return {"ok": True, "moved": moved}
-
     except Exception as e:
         logger.warning("copilot push-now error tenant=%s: %s", tenant_id, e)
         return {"ok": False, "moved": 0, "error": str(e)}
