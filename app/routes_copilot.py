@@ -239,14 +239,14 @@ def copilot_push_worker():
                     conn = get_connection()
                     cur  = conn.cursor(dictionary=True)
 
+                    # Query vicidial_list directly — leads have status AL for longer than 35s
                     cur.execute("""
-                        SELECT DISTINCT vl.lead_id
-                        FROM vicidial_log vlog
-                        JOIN vicidial_list vl ON vlog.lead_id = vl.lead_id
-                        WHERE vlog.campaign_id = %s
-                          AND vlog.status = 'AL'
-                          AND vlog.call_date >= NOW() - INTERVAL 35 SECOND
-                          AND vl.list_id != %s
+                        SELECT lead_id FROM vicidial_list
+                        WHERE list_id IN (
+                            SELECT list_id FROM vicidial_lists WHERE campaign_id=%s
+                        )
+                        AND status = 'AL'
+                        AND list_id != %s
                     """, (campaign_id, dest_list_id))
                     leads = cur.fetchall()
 
