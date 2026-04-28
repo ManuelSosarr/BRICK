@@ -17,10 +17,6 @@ Start-Process powershell -ArgumentList '-NoExit', '-Command', 'cd C:\Users\sosai
 Start-Sleep -Seconds 5
 Start-Process powershell -ArgumentList '-NoExit', '-Command', 'ssh -f -N -L 3307:127.0.0.1:3306 root@144.126.146.250 -p 22 -i "C:\Users\sosai\.ssh\vicidial_key" -o StrictHostKeyChecking=no -o ServerAliveInterval=60'
 Start-Sleep -Seconds 3
-# Remote tunnel — expone frontend via SSH reverse tunnel (sin ngrok, sin tokens)
-# Acceso externo: http://144.126.146.250:8080
-Start-Process powershell -ArgumentList '-NoExit', '-Command', 'ssh -N -R 0.0.0.0:8080:localhost:5173 root@144.126.146.250 -i "C:\Users\sosai\.ssh\vicidial_key" -o StrictHostKeyChecking=no -o ServerAliveInterval=60'
-Write-Host "BRICK Remote URL: http://144.126.146.250:8080" -ForegroundColor Green
 # Watchdog — reinicia backends si alguno cae
 Start-Process powershell -ArgumentList '-NoExit', '-Command', 'C:\Users\sosai\BRICK\BRICK-watchdog.ps1'
 Start-Sleep -Seconds 2
