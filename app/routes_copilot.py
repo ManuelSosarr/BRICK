@@ -110,8 +110,6 @@ def _run_push_for_campaign(campaign_id: str) -> int:
         """, [dest_list_id] + lead_ids)
         conn.commit()
         moved = len(leads)
-        current = int(get_copilot_config(campaign_id, "pushed_today") or 0)
-        set_copilot_config(campaign_id, "pushed_today", str(current + moved))
         logger.info("copilot: moved %d AL leads → list %s (campaign %s)",
                     moved, dest_list_id, campaign_id)
 
@@ -156,11 +154,12 @@ def run_copilot_push_all():
 
 
 def reset_pushed_today_all():
-    """Reset pushed_today counter for all configured campaigns. Called at midnight EST."""
+    """Reset session_started_at to midnight for all configured campaigns. Called at midnight EST."""
+    midnight_str = (datetime.now(EST) if EST else datetime.now()).strftime('%Y-%m-%d 00:00:00')
     for campaign_id in _get_all_configured_campaigns():
         try:
-            set_copilot_config(campaign_id, "pushed_today", "0")
-            logger.info("copilot: reset pushed_today for campaign=%s", campaign_id)
+            set_copilot_config(campaign_id, "session_started_at", midnight_str)
+            logger.info("copilot: reset session_started_at for campaign=%s", campaign_id)
         except Exception as e:
             logger.warning("copilot midnight reset error campaign=%s: %s", campaign_id, e)
 
@@ -196,6 +195,21 @@ def copilot_status(tenant_id: str = Query(...)):
             WHERE campaign_id=%s AND call_date >= %s
         """, (campaign_id, today_est))
         kpis = cur.fetchone()
+
+        # Pushed = AL calls in vicidial_log since the session was started (not a SQLite counter)
+        session_started_at = get_copilot_config(campaign_id, "session_started_at")
+        pushed_count = 0
+        if session_started_at:
+            cur.execute("""
+                SELECT COUNT(*) as pushed
+                FROM vicidial_log
+                WHERE campaign_id = %s
+                  AND status = 'AL'
+                  AND call_date >= %s
+            """, (campaign_id, session_started_at))
+            pushed_row = cur.fetchone()
+            pushed_count = int(pushed_row["pushed"] or 0)
+
         cur.close()
         conn.close()
 
@@ -209,7 +223,7 @@ def copilot_status(tenant_id: str = Query(...)):
             "answered":         int(kpis["answered"] or 0),
             "possible_working": int(kpis["possible_working"] or 0),
             "excluded":         int(kpis["excluded"] or 0),
-            "pushed_today":     int(get_copilot_config(campaign_id, "pushed_today") or 0),
+            "pushed_today":     pushed_count,
             "copilot_active":   get_copilot_config(campaign_id, "copilot_active") == "true",
             "dest_list_id":     dest_list_id,
             "last_call":        str(kpis["last_call"]) if kpis["last_call"] else None,
@@ -252,8 +266,9 @@ def copilot_toggle(payload: dict):
         return {"ok": False, "error": f"DB error: {str(e)}"}
 
     if action == "START":
-        set_copilot_config(campaign_id, "copilot_active", "true")
-        set_copilot_config(campaign_id, "pushed_today",   "0")
+        now_str = (datetime.now(EST) if EST else datetime.now()).strftime('%Y-%m-%d %H:%M:%S')
+        set_copilot_config(campaign_id, "copilot_active",    "true")
+        set_copilot_config(campaign_id, "session_started_at", now_str)
         rc, out, err = _ssh(f"nohup {AUTODIAL} --campaign={campaign_id} --loop > /dev/null 2>&1 &")
         logger.info("copilot START ssh rc=%s out=%s err=%s", rc, out, err)
     else:
