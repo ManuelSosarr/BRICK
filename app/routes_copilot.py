@@ -196,19 +196,16 @@ def copilot_status(tenant_id: str = Query(...)):
         """, (campaign_id, today_est))
         kpis = cur.fetchone()
 
-        # Pushed = AL calls in vicidial_log since the session was started (not a SQLite counter)
-        session_started_at = get_copilot_config(campaign_id, "session_started_at")
-        pushed_count = 0
-        if session_started_at:
-            cur.execute("""
-                SELECT COUNT(*) as pushed
-                FROM vicidial_log
-                WHERE campaign_id = %s
-                  AND status = 'AL'
-                  AND call_date >= %s
-            """, (campaign_id, session_started_at))
-            pushed_row = cur.fetchone()
-            pushed_count = int(pushed_row["pushed"] or 0)
+        # Pushed = AL dispositions logged today (DATE comparison avoids UTC/EST timezone skew)
+        cur.execute("""
+            SELECT COUNT(*) as pushed
+            FROM vicidial_log
+            WHERE campaign_id = %s
+              AND status = 'AL'
+              AND DATE(call_date) = DATE(%s)
+        """, (campaign_id, today_est))
+        pushed_row = cur.fetchone()
+        pushed_count = int(pushed_row["pushed"] or 0)
 
         cur.close()
         conn.close()
