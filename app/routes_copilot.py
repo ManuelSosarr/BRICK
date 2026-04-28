@@ -196,14 +196,14 @@ def copilot_status(tenant_id: str = Query(...)):
         """, (campaign_id, today_est))
         kpis = cur.fetchone()
 
-        # Pushed = AL dispositions logged today (DATE comparison avoids UTC/EST timezone skew)
+        # Pushed = AL dispositions logged today — CURDATE() uses MySQL server's local date
         cur.execute("""
             SELECT COUNT(*) as pushed
             FROM vicidial_log
             WHERE campaign_id = %s
               AND status = 'AL'
-              AND DATE(call_date) = DATE(%s)
-        """, (campaign_id, today_est))
+              AND DATE(call_date) = CURDATE()
+        """, (campaign_id,))
         pushed_row = cur.fetchone()
         pushed_count = int(pushed_row["pushed"] or 0)
 
