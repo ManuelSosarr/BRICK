@@ -196,21 +196,23 @@ def copilot_status(tenant_id: str = Query(...)):
         """, (campaign_id, today_est))
         kpis = cur.fetchone()
 
-        # Pushed = AL dispositions logged today — CURDATE() uses MySQL server's local date
+        # Pushed = AL dispositions today — reuses today_est to match timezone of other KPIs
+        # (CURDATE() in MySQL can return a different date if server TZ differs from EST)
         cur.execute("""
             SELECT COUNT(*) as pushed
             FROM vicidial_log
             WHERE campaign_id = %s
               AND status = 'AL'
-              AND DATE(call_date) = CURDATE()
-        """, (campaign_id,))
+              AND call_date >= %s
+        """, (campaign_id, today_est))
         pushed_row = cur.fetchone()
         pushed_count = int(pushed_row["pushed"] or 0)
 
         cur.close()
         conn.close()
 
-        dest_list_id = get_copilot_config(campaign_id, "dest_list_id") or ""
+        dest_list_id     = get_copilot_config(campaign_id, "dest_list_id")     or ""
+        dest_campaign_id = get_copilot_config(campaign_id, "dest_campaign_id") or campaign_id
 
         return {
             "tenant_id":        tenant_id,
@@ -223,6 +225,7 @@ def copilot_status(tenant_id: str = Query(...)):
             "pushed_today":     pushed_count,
             "copilot_active":   get_copilot_config(campaign_id, "copilot_active") == "true",
             "dest_list_id":     dest_list_id,
+            "dest_campaign_id": dest_campaign_id,
             "last_call":        str(kpis["last_call"]) if kpis["last_call"] else None,
         }
     except Exception as e:
@@ -280,8 +283,9 @@ def copilot_toggle(payload: dict):
 @router.post("/set-dest")
 def copilot_set_dest(payload: dict):
     """Save the destination list for a tenant's Co-Pilot."""
-    tenant_id    = str(payload.get("tenant_id", "")).strip()
-    dest_list_id = str(payload.get("dest_list_id", "")).strip()
+    tenant_id        = str(payload.get("tenant_id", "")).strip()
+    dest_list_id     = str(payload.get("dest_list_id", "")).strip()
+    dest_campaign_id = str(payload.get("dest_campaign_id", "")).strip()
     if not tenant_id or not dest_list_id:
         return {"ok": False, "error": "tenant_id and dest_list_id required"}
 
@@ -289,8 +293,11 @@ def copilot_set_dest(payload: dict):
     if not campaign_id:
         return {"ok": False, "error": f"No campaign assigned to tenant '{tenant_id}'"}
 
-    set_copilot_config(campaign_id, "dest_list_id", dest_list_id)
-    logger.info("copilot set dest_list_id=%s campaign=%s", dest_list_id, campaign_id)
+    set_copilot_config(campaign_id, "dest_list_id",     dest_list_id)
+    if dest_campaign_id:
+        set_copilot_config(campaign_id, "dest_campaign_id", dest_campaign_id)
+    logger.info("copilot set dest_list_id=%s dest_campaign=%s campaign=%s",
+                dest_list_id, dest_campaign_id, campaign_id)
     return {"ok": True, "campaign_id": campaign_id, "dest_list_id": dest_list_id}
 
 
