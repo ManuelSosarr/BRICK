@@ -20,4 +20,20 @@ Start-Sleep -Seconds 3
 # Watchdog — reinicia backends si alguno cae
 Start-Process powershell -ArgumentList '-NoExit', '-Command', 'C:\Users\sosai\BRICK\BRICK-watchdog.ps1'
 Start-Sleep -Seconds 2
+# NGROK
+$ngrokProcess = Get-Process ngrok -ErrorAction SilentlyContinue
+if (-not $ngrokProcess) {
+    Start-Process "C:\Users\sosai\ngrok.exe" -ArgumentList "http 5173" -NoNewWindow
+    Start-Sleep -Seconds 3
+}
+try {
+    $tunnels = Invoke-RestMethod -Uri "http://localhost:4040/api/tunnels" -TimeoutSec 5
+    $publicUrl = $tunnels.tunnels | Where-Object { $_.proto -eq "https" } | Select-Object -ExpandProperty public_url
+    if ($publicUrl) {
+        Write-Host "BRICK Remote URL: $publicUrl" -ForegroundColor Green
+        $publicUrl | Out-File -FilePath "C:\Users\sosai\brick_ngrok_url.txt" -Encoding utf8
+    }
+} catch {
+    Write-Host "NGROK: no se pudo obtener URL — verificar manualmente en localhost:4040" -ForegroundColor Yellow
+}
 Start-Process "http://localhost:5173"

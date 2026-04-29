@@ -656,23 +656,21 @@ def burner_reset(payload: dict):
     except Exception as e:
         return {"ok": False, "error": f"DB error during reset: {str(e)}"}
 
-    # Explicit EXCLUD cleanup — belt-and-suspenders for any residuals not caught above
+    # EXCLUD cleanup — lista 808 puede tener EXCLUD residuales fuera del subquery de campaign_id
     try:
         cur.execute("""
             DELETE FROM vicidial_list
-            WHERE list_id IN (SELECT list_id FROM vicidial_lists WHERE campaign_id=%s)
-            AND status = 'EXCLUD'
-        """, (campaign_id,))
-        excluded_cleaned = cur.rowcount
+            WHERE list_id = 808 AND status = 'EXCLUD'
+        """)
         conn.commit()
-        logger.info("EXCLUD cleanup: %d registros eliminados (campaign %s)", excluded_cleaned, campaign_id)
+        logger.info(f"EXCLUD cleanup: {cur.rowcount} registros eliminados de lista 808")
     except Exception as e:
-        logger.error("EXCLUD cleanup failed campaign=%s: %s", campaign_id, e)
+        logger.error("EXCLUD cleanup failed list_id=808: %s", e)
         cur.close()
         conn.close()
         return {
             "status": "partial",
-            "message": "Reset de KPIs completado pero limpieza de EXCLUD falló — ejecutar manualmente",
+            "message": "Reset completado pero limpieza de EXCLUD falló — ejecutar manualmente",
             "kpis_reset": True,
         }
 
